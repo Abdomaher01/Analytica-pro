@@ -1,0 +1,79 @@
+feature,importance
+risk_minus_credibility,0.67859894
+credibility_score,0.22469063
+uncertainty_index,0.038412426
+emotion_trust,0.0073713013
+day_Monday,0.0036539068
+crisis_phase_peak,0.0034546137
+sentiment_label_negative,0.003262801
+source_type_bot,0.003256983
+crisis_phase_escalation,0.00276108
+crisis_phase_pre-crisis,0.0025084428
+source_type_user,0.0023839152
+claim_type_rumor,0.0023535248
+topic_user complaints,0.0021074384
+month_June,0.0016728925
+claim_type_opinion,0.001529568
+audience_size,0.0014563082
+toxicity_subjectivity_interaction,0.0012368364
+following_count,0.0011567838
+crisis_phase_response,0.0011427689
+sentiment_score,0.0011009773
+impressions_estimate,0.0010542546
+share_comment_ratio,0.0009256622
+emotion_fear,0.0007446582
+platform_twitter,0.0007112119
+subjectivity_score,0.00068655907
+reach_rate,0.00065661164
+total_engagement,0.00063842064
+likes,0.0006208352
+reach_estimate,0.00061700115
+engagement_velocity,0.0005884558
+shares,0.0005412775
+account_age_days,0.0005162119
+toxicity_score,0.00043899784
+share_rate,0.00040290624
+platform_facebook,0.0003934018
+like_rate,0.00039324578
+topic_platform instability,0.00034217312
+comments,0.00033811457
+log_followers,0.00033261318
+stance_label_support,0.0003238656
+follower_count,0.00029612263
+comment_rate,0.00028767128
+topic_privacy concerns,0.00028462714
+follower_following_ratio,0.0002597312
+topic_official communication,0.00024056871
+month_July,0.00023790683
+day_Friday,0.00018413283
+day_Sunday,0.0001774876
+source_type_influencer,0.00016922543
+topic_recovery signals,0.000153113
+day_Saturday,0.0001509873
+is_share,0.00015079595
+log_impressions,0.00014430656
+day_Thursday,0.0001426599
+emotion_frustration,0.00014011736
+platform_reddit,0.00013468665
+month_August,0.00013441384
+emotion_confusion,0.00013409326
+day_Wednesday,0.00013214284
+stance_label_criticize,0.00012633204
+day_Tuesday,0.00010820877
+stance_label_neutral,0.00010813842
+claim_type_fact claim,0.00010723429
+claim_type_observation,0.00010670941
+source_type_news outlet,9.825007e-05
+topic_rumor circulation,9.712825e-05
+topic_service disruption,8.2979284e-05
+cascade_depth,7.447678e-05
+emotion_anger,5.937675e-05
+stance_label_question,5.8421327e-05
+crisis_phase_recovery,2.0011523e-05
+emotion_relief,1.9347124e-05
+verified_flag,0.0
+year,0.0
+sentiment_label_neutral,0.0
+sentiment_label_positive,0.0
+region_global,0.0
+language_english,0.0

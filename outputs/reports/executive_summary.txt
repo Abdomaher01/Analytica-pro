@@ -1,0 +1,27 @@
+Executive Summary
+=================
+
+1. What drives virality?
+Virality is most strongly associated with total_engagement. Content teams should monitor this signal because it is the clearest modeled driver of engagement velocity.
+
+2. What drives misinformation?
+Misinformation risk is most strongly associated with risk_minus_credibility. This signal should be prioritized in moderation queues and early-warning dashboards.
+
+3. What characterizes credible content?
+Credibility is most strongly associated with stance_label. Stakeholders should amplify content patterns that match this profile and audit posts that move in the opposite direction.
+
+4. Which user groups exist?
+The segmentation model identified 3 K-Means user/post groups. These groups separate audiences by engagement, credibility, toxicity, and misinformation risk, enabling differentiated response strategies.
+
+5. Which anomalies were discovered?
+IsolationForest flagged 8,781 unusual records. These records show rare combinations of audience size, engagement, toxicity, credibility, and misinformation risk, making them strong candidates for human review.
+
+6. What trends are expected next month?
+The forecast suggests an upward engagement trend, an downward misinformation trend, and an upward post-volume trend over the next 30 days.
+
+7. What are the most important strategic recommendations?
+- Build monitoring dashboards around the strongest engagement and misinformation drivers.
+- Prioritize anomalous high-risk records for analyst review.
+- Use cluster profiles to tailor crisis response messages by audience behavior.
+- Track cascade centrality because the largest cascade contains 6 nodes and can reveal influential propagation points.
+- Re-run this pipeline after each major crisis phase to keep forecasts and model explanations current.

@@ -1,0 +1,79 @@
+feature,importance
+risk_minus_credibility,0.67550296
+misinformation_probability,0.21268857
+source_type_influencer,0.020612357
+uncertainty_index,0.018372001
+stance_label_support,0.009797825
+crisis_phase_escalation,0.0070325686
+topic_user complaints,0.0055942857
+platform_facebook,0.0039209975
+stance_label_question,0.0035992688
+sentiment_label_negative,0.0030148341
+topic_privacy concerns,0.0024477767
+day_Tuesday,0.0024079313
+share_comment_ratio,0.0017226902
+emotion_relief,0.0017064053
+topic_rumor circulation,0.0016792386
+claim_type_observation,0.0016312927
+total_engagement,0.0015543076
+follower_following_ratio,0.0015247203
+sentiment_score,0.001460599
+emotion_frustration,0.0013539233
+crisis_phase_peak,0.0012769438
+shares,0.0011847675
+account_age_days,0.0011351812
+comment_rate,0.0010017244
+share_rate,0.00091386284
+comments,0.00085818005
+like_rate,0.00084769435
+subjectivity_score,0.00078786584
+follower_count,0.00076945423
+toxicity_score,0.00074123626
+month_July,0.00074101443
+impressions_estimate,0.00064562814
+day_Wednesday,0.0006248136
+engagement_velocity,0.00057939783
+reach_rate,0.0005558675
+reach_estimate,0.00054444704
+toxicity_subjectivity_interaction,0.0005424856
+log_impressions,0.00053751445
+crisis_phase_recovery,0.0004898984
+audience_size,0.0004865327
+day_Sunday,0.00044341866
+log_followers,0.0004280284
+following_count,0.00038938387
+topic_platform instability,0.00035207949
+emotion_fear,0.00028847627
+claim_type_rumor,0.00028694043
+stance_label_criticize,0.00027699905
+emotion_confusion,0.00027041102
+likes,0.00025975853
+cascade_depth,0.0002567704
+claim_type_opinion,0.0002503286
+day_Thursday,0.00024739958
+topic_service disruption,0.00021588342
+emotion_anger,0.0002142852
+is_share,0.00020797894
+month_June,0.00020528582
+stance_label_neutral,0.00019881263
+platform_reddit,0.00019766088
+source_type_news outlet,0.0001957091
+day_Monday,0.0001939155
+topic_official communication,0.00018344444
+month_August,0.00018180588
+source_type_bot,0.00017697195
+day_Saturday,0.00016848449
+emotion_trust,0.00016700775
+source_type_user,0.00016137118
+platform_twitter,0.00015487861
+day_Friday,0.00014124613
+topic_recovery signals,0.00014086724
+claim_type_fact claim,0.00012041138
+crisis_phase_pre-crisis,8.8855304e-05
+crisis_phase_response,3.126351e-05
+sentiment_label_positive,1.469798e-05
+verified_flag,0.0
+year,0.0
+sentiment_label_neutral,0.0
+region_global,0.0
+language_english,0.0

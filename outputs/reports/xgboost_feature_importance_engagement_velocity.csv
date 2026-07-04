@@ -1,0 +1,79 @@
+feature,importance
+is_share,0.10400935
+cascade_depth,0.06304708
+crisis_phase_peak,0.058367502
+source_type_bot,0.052532397
+day_Wednesday,0.048264276
+total_engagement,0.047064587
+likes,0.036198735
+reach_rate,0.03330562
+toxicity_subjectivity_interaction,0.030774347
+uncertainty_index,0.030549752
+follower_following_ratio,0.025969915
+day_Saturday,0.025891045
+topic_privacy concerns,0.023361716
+toxicity_score,0.022255924
+share_rate,0.021220347
+following_count,0.02065974
+log_impressions,0.020188455
+subjectivity_score,0.020167911
+stance_label_question,0.017283516
+misinformation_probability,0.016914269
+month_July,0.016188141
+risk_minus_credibility,0.015868189
+credibility_score,0.015689274
+account_age_days,0.015586029
+sentiment_score,0.015522297
+follower_count,0.015309095
+impressions_estimate,0.014948722
+shares,0.014482533
+audience_size,0.014290532
+comment_rate,0.014186324
+reach_estimate,0.013807717
+source_type_user,0.013298017
+comments,0.012196619
+source_type_influencer,0.011747207
+emotion_frustration,0.010720989
+share_comment_ratio,0.010511606
+topic_rumor circulation,0.00831273
+topic_recovery signals,0.0077773724
+topic_user complaints,0.0069432426
+platform_twitter,0.0062964866
+day_Thursday,0.0054511395
+source_type_news outlet,0.00499236
+emotion_anger,0.004561108
+like_rate,0.004547064
+day_Friday,0.0039264206
+emotion_fear,0.0024437744
+crisis_phase_response,0.0023686124
+verified_flag,0.0
+topic_platform instability,0.0
+topic_service disruption,0.0
+sentiment_label_negative,0.0
+platform_reddit,0.0
+crisis_phase_pre-crisis,0.0
+crisis_phase_recovery,0.0
+platform_facebook,0.0
+log_followers,0.0
+year,0.0
+topic_official communication,0.0
+crisis_phase_escalation,0.0
+emotion_confusion,0.0
+emotion_relief,0.0
+sentiment_label_positive,0.0
+claim_type_rumor,0.0
+claim_type_opinion,0.0
+claim_type_observation,0.0
+claim_type_fact claim,0.0
+stance_label_support,0.0
+stance_label_neutral,0.0
+stance_label_criticize,0.0
+emotion_trust,0.0
+sentiment_label_neutral,0.0
+month_August,0.0
+region_global,0.0
+language_english,0.0
+day_Monday,0.0
+month_June,0.0
+day_Sunday,0.0
+day_Tuesday,0.0
