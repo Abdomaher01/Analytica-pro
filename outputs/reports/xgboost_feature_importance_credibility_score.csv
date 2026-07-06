@@ -1,79 +1,79 @@
 feature,importance
-risk_minus_credibility,0.67550296
-misinformation_probability,0.21268857
-source_type_influencer,0.020612357
-uncertainty_index,0.018372001
-stance_label_support,0.009797825
-crisis_phase_escalation,0.0070325686
-topic_user complaints,0.0055942857
-platform_facebook,0.0039209975
-stance_label_question,0.0035992688
-sentiment_label_negative,0.0030148341
-topic_privacy concerns,0.0024477767
-day_Tuesday,0.0024079313
-share_comment_ratio,0.0017226902
-emotion_relief,0.0017064053
-topic_rumor circulation,0.0016792386
-claim_type_observation,0.0016312927
-total_engagement,0.0015543076
-follower_following_ratio,0.0015247203
-sentiment_score,0.001460599
-emotion_frustration,0.0013539233
-crisis_phase_peak,0.0012769438
-shares,0.0011847675
-account_age_days,0.0011351812
-comment_rate,0.0010017244
-share_rate,0.00091386284
-comments,0.00085818005
-like_rate,0.00084769435
-subjectivity_score,0.00078786584
-follower_count,0.00076945423
-toxicity_score,0.00074123626
-month_July,0.00074101443
-impressions_estimate,0.00064562814
-day_Wednesday,0.0006248136
-engagement_velocity,0.00057939783
-reach_rate,0.0005558675
-reach_estimate,0.00054444704
-toxicity_subjectivity_interaction,0.0005424856
-log_impressions,0.00053751445
-crisis_phase_recovery,0.0004898984
-audience_size,0.0004865327
-day_Sunday,0.00044341866
-log_followers,0.0004280284
-following_count,0.00038938387
-topic_platform instability,0.00035207949
-emotion_fear,0.00028847627
-claim_type_rumor,0.00028694043
-stance_label_criticize,0.00027699905
-emotion_confusion,0.00027041102
-likes,0.00025975853
-cascade_depth,0.0002567704
-claim_type_opinion,0.0002503286
-day_Thursday,0.00024739958
-topic_service disruption,0.00021588342
-emotion_anger,0.0002142852
-is_share,0.00020797894
-month_June,0.00020528582
-stance_label_neutral,0.00019881263
-platform_reddit,0.00019766088
-source_type_news outlet,0.0001957091
-day_Monday,0.0001939155
-topic_official communication,0.00018344444
-month_August,0.00018180588
-source_type_bot,0.00017697195
-day_Saturday,0.00016848449
-emotion_trust,0.00016700775
-source_type_user,0.00016137118
-platform_twitter,0.00015487861
-day_Friday,0.00014124613
-topic_recovery signals,0.00014086724
-claim_type_fact claim,0.00012041138
-crisis_phase_pre-crisis,8.8855304e-05
-crisis_phase_response,3.126351e-05
-sentiment_label_positive,1.469798e-05
+risk_minus_credibility,0.84762436
+misinformation_probability,0.14770208
+follower_count,0.0002736691
+month_June,0.00024355108
+stance_label_Criticize,0.0001857662
+topic_Service disruption,0.00018163954
+stance_label_Support,0.00016668983
+source_type_User,0.00015647682
+claim_type_Observation,0.00015515249
+reach_estimate,0.00014269094
+share_rate,0.00014251552
+toxicity_subjectivity_interaction,0.00013864083
+topic_Rumor circulation,0.0001307056
+uncertainty_index,0.00012355547
+topic_User complaints,0.00012190946
+comment_rate,0.000116124575
+comments,0.00011261725
+subjectivity_score,0.00011152528
+platform_Facebook,0.00010862652
+emotion_Confusion,9.365799e-05
+audience_size,9.247676e-05
+total_engagement,9.206501e-05
+engagement_velocity,8.1724895e-05
+stance_label_Question,8.0993064e-05
+claim_type_Fact Claim,8.078524e-05
+share_comment_ratio,7.9507874e-05
+follower_following_ratio,7.535709e-05
+following_count,7.50943e-05
+emotion_Anger,7.387097e-05
+claim_type_Rumor,7.212128e-05
+impressions_estimate,7.1729846e-05
+day_Wednesday,6.900101e-05
+source_type_Influencer,6.8757065e-05
+day_Monday,6.751159e-05
+reach_rate,6.721082e-05
+toxicity_score,6.401869e-05
+account_age_days,5.8132246e-05
+likes,5.4263917e-05
+like_rate,5.323975e-05
+shares,5.253324e-05
+sentiment_score,4.9444967e-05
+stance_label_Neutral,4.545687e-05
+platform_Twitter,4.5443845e-05
+topic_Recovery signals,4.1196156e-05
+topic_Privacy concerns,3.8792128e-05
+emotion_Frustration,3.462975e-05
+source_type_Bot,3.456807e-05
+emotion_Trust,3.2579253e-05
+day_Friday,3.208128e-05
+month_August,3.194829e-05
+platform_Reddit,2.4286373e-05
+emotion_Fear,2.2517723e-05
+day_Saturday,1.9389101e-05
+crisis_phase_Escalation,1.8095101e-05
+topic_Platform instability,1.4807721e-05
+topic_Official communication,1.22136435e-05
+cascade_depth,1.0959985e-05
+day_Thursday,9.422953e-06
+month_July,8.355326e-06
+emotion_Relief,5.0183785e-06
+is_share,2.389738e-06
+day_Tuesday,2.2771649e-06
+crisis_phase_Peak,1.7485078e-06
 verified_flag,0.0
+crisis_phase_Recovery,0.0
+crisis_phase_Pre-Crisis,0.0
+log_impressions,0.0
 year,0.0
-sentiment_label_neutral,0.0
-region_global,0.0
-language_english,0.0
+log_followers,0.0
+crisis_phase_Response,0.0
+sentiment_label_Negative,0.0
+claim_type_Opinion,0.0
+sentiment_label_Neutral,0.0
+sentiment_label_Positive,0.0
+region_Global,0.0
+language_English,0.0
+source_type_News Outlet,0.0
+day_Sunday,0.0

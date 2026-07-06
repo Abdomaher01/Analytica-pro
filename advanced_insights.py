@@ -7,11 +7,20 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
 import pickle
+import subprocess
+import sys
+import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import resource
+except ImportError:  # Windows does not provide the resource module
+    resource = None
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
@@ -28,7 +37,8 @@ from sklearn.metrics import (
     r2_score,
     silhouette_score,
 )
-from sklearn.model_selection import GridSearchCV, KFold, train_test_split
+from joblib import Memory
+from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -65,16 +75,14 @@ sns.set_theme(style="whitegrid", palette="deep")
 
 
 TARGETS = [
-    "engagement_velocity",
     "misinformation_probability",
     "credibility_score",
 ]
 
-# These are the three supervised learning questions the project answers.
+# These are the supervised learning targets retained after model evaluation.
 # Keeping them in one list lets the same training/evaluation code run for each
-# target instead of copying three nearly identical modeling blocks.
+# target instead of copying nearly identical modeling blocks.
 TARGET_LABELS = {
-    "engagement_velocity": "Engagement Velocity",
     "misinformation_probability": "Misinformation Probability",
     "credibility_score": "Credibility Score",
 }
@@ -119,6 +127,162 @@ class ModelResult:
     x_test_raw: pd.DataFrame
     y_test: pd.Series
     predictions: np.ndarray
+    training_seconds: float = 0.0
+    device_used: str = "cpu"
+
+
+def get_cpu_thread_count() -> int:
+    """Return the number of CPU threads to use for parallel sklearn jobs."""
+
+    return max(1, os.cpu_count() or 1)
+
+
+def get_pipeline_memory() -> Memory:
+    """Cache expensive preprocessing steps across hyperparameter search."""
+
+    cache_dir = Path(".cache/sklearn")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return Memory(location=str(cache_dir), verbose=0)
+
+
+def get_training_hardware_profile() -> dict[str, Any]:
+    """Collect CPU/GPU information and memory limits for training logs."""
+
+    cpu_count = os.cpu_count() or 1
+    cpu_threads = get_cpu_thread_count()
+    gpu_info: dict[str, Any] | None = None
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            name, memory_total, memory_used = [
+                item.strip() for item in result.stdout.strip().splitlines()[0].split(",", 2)
+            ]
+            gpu_info = {
+                "name": name,
+                "memory_total_mb": int(memory_total),
+                "memory_used_mb": int(memory_used),
+            }
+    except Exception:
+        gpu_info = None
+
+    peak_rss_mb = 0.0
+    if resource is not None:
+        peak_rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_rss_mb = peak_rss_kb / 1024.0 if os.name != "nt" else peak_rss_kb / (1024.0 * 1024.0)
+
+    return {
+        "cpu_count": cpu_count,
+        "cpu_threads": cpu_threads,
+        "gpu_info": gpu_info,
+        "peak_rss_mb": round(peak_rss_mb, 2),
+    }
+
+
+def resolve_xgboost_device(requested: str = "auto") -> str:
+    """Detect CUDA availability and fall back to CPU when needed."""
+
+    if requested == "cpu":
+        return "cpu"
+    if XGBRegressor is None:
+        return "cpu"
+
+    if requested == "cuda":
+        candidate = "cuda"
+    else:
+        candidate = "cuda"
+
+    try:
+        probe = XGBRegressor(
+            objective="reg:squarederror",
+            n_estimators=1,
+            max_depth=2,
+            tree_method="hist",
+            device="cuda" if candidate == "cuda" else "cpu",
+        )
+        probe.fit(np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32), np.array([0.0, 1.0], dtype=np.float32))
+        return candidate
+    except Exception as exc:
+        if requested == "cuda":
+            logging.warning("CUDA requested but unavailable (%s). Falling back to CPU.", exc)
+        return "cpu"
+
+
+def log_training_environment(device: str, paths: OutputPaths) -> None:
+    """Log CPU/GPU availability and current memory usage before training."""
+
+    profile = get_training_hardware_profile()
+    gpu_name = profile["gpu_info"]["name"] if profile["gpu_info"] else "CPU-only"
+    logging.info(
+        "Training hardware: device=%s cpu_cores=%s cpu_threads=%s gpu=%s",
+        device,
+        profile["cpu_count"],
+        profile["cpu_threads"],
+        gpu_name,
+    )
+    logging.info("Current memory footprint: %.2f MB", profile["peak_rss_mb"])
+    if profile["gpu_info"]:
+        logging.info(
+            "GPU memory: %s MB used / %s MB total",
+            profile["gpu_info"]["memory_used_mb"],
+            profile["gpu_info"]["memory_total_mb"],
+        )
+
+    save_text(
+        paths.reports / "training_environment.txt",
+        "\n".join(
+            [
+                f"device={device}",
+                f"cpu_cores={profile['cpu_count']}",
+                f"cpu_threads={profile['cpu_threads']}",
+                f"gpu={gpu_name}",
+                f"peak_rss_mb={profile['peak_rss_mb']:.2f}",
+                (
+                    f"gpu_memory_used_mb={profile['gpu_info']['memory_used_mb']}"
+                    if profile["gpu_info"]
+                    else "gpu_memory_used_mb=0"
+                ),
+                (
+                    f"gpu_memory_total_mb={profile['gpu_info']['memory_total_mb']}"
+                    if profile["gpu_info"]
+                    else "gpu_memory_total_mb=0"
+                ),
+            ]
+        ),
+    )
+
+
+def log_model_training_stats(target: str, device: str, elapsed_seconds: float) -> None:
+    """Log per-model hardware usage after training completes."""
+
+    profile = get_training_hardware_profile()
+    gpu_name = profile["gpu_info"]["name"] if profile["gpu_info"] else "CPU-only"
+    logging.info("Model %s trained in %.2f seconds on %s", target, elapsed_seconds, device)
+    logging.info(
+        "Model %s resource usage: cpu_threads=%s peak_rss_mb=%.2f gpu=%s",
+        target,
+        profile["cpu_threads"],
+        profile["peak_rss_mb"],
+        gpu_name,
+    )
+    if profile["gpu_info"]:
+        logging.info(
+            "Model %s GPU memory: %s MB used / %s MB total",
+            target,
+            profile["gpu_info"]["memory_used_mb"],
+            profile["gpu_info"]["memory_total_mb"],
+        )
+
 
 # Status Logging in terminal
 def configure_logging(report_dir: Path) -> None:
@@ -183,6 +347,16 @@ def load_dataset(data_path: Path) -> pd.DataFrame:
     for column in data.columns:
         if column.endswith("_flag") or column in {"is_share"}:
             data[column] = pd.to_numeric(data[column], errors="coerce")
+
+    numeric_columns = data.select_dtypes(include=[np.number]).columns
+    for column in numeric_columns:
+        data[column] = data[column].astype("float32")
+
+    categorical_columns = [
+        column for column in data.columns if column not in numeric_columns and column not in {"post_id", "parent_post_id"}
+    ]
+    for column in categorical_columns:
+        data[column] = data[column].astype("category")
 
     return data
 
@@ -291,8 +465,15 @@ def make_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
 
 def get_xgboost_gpu_params(device: str) -> dict[str, Any]:
     """Return XGBoost parameters for CPU or CUDA training."""
+
+    cpu_threads = get_cpu_thread_count()
     if device == "cpu":
-        return {"tree_method": "hist"}
+        return {
+            "tree_method": "hist",
+            "max_bin": 256,
+            "max_cat_to_onehot": 4,
+            "n_jobs": cpu_threads,
+        }
 
     try:
         import xgboost as xgb
@@ -303,11 +484,17 @@ def get_xgboost_gpu_params(device: str) -> dict[str, Any]:
         return {
             "tree_method": "hist",
             "device": "cuda",
+            "max_bin": 512,
+            "max_cat_to_onehot": 4,
+            "predictor": "gpu_predictor",
+            "n_jobs": cpu_threads,
         }
 
     return {
         "tree_method": "gpu_hist",
         "predictor": "gpu_predictor",
+        "max_bin": 512,
+        "n_jobs": cpu_threads,
     }
 
 
@@ -322,8 +509,14 @@ def make_xgb_regressor(random_state: int, device: str) -> Any:
     return XGBRegressor(
         objective="reg:squarederror",
         random_state=random_state,
-        n_jobs=-1,
         eval_metric="rmse",
+        n_estimators=300,
+        max_depth=6,
+        learning_rate=0.05,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_lambda=1.0,
+        reg_alpha=0.0,
         **get_xgboost_gpu_params(device),
     )
 
@@ -333,43 +526,63 @@ def tune_xgboost_model(
     target_values: pd.Series,
     random_state: int,
     device: str,
-) -> GridSearchCV:
+) -> tuple[RandomizedSearchCV, str]:
     """Tune an XGBoost pipeline with cross-validation."""
 
+    active_device = device
     # The Pipeline keeps preprocessing and modeling together. This is important:
     # during cross-validation, preprocessing is learned only from each training
     # fold, which avoids accidentally learning from validation data.
-    model = Pipeline(
-        steps=[
-            ("preprocess", make_preprocessor(features)),
-            ("model", make_xgb_regressor(random_state, device)),
-        ]
-    )
+    def build_search(estimator_device: str) -> RandomizedSearchCV:
+        model = Pipeline(
+            steps=[
+                ("preprocess", make_preprocessor(features)),
+                ("model", make_xgb_regressor(random_state, estimator_device)),
+            ],
+            memory=get_pipeline_memory(),
+        )
 
-    # The grid is intentionally small enough for a laptop project while still
-    # testing the main XGBoost tradeoffs: tree count, depth, learning rate, and
-    # regularization.
-    param_grid = {
-        "model__n_estimators": [150, 300],
-        "model__max_depth": [3, 5],
-        "model__learning_rate": [0.03, 0.08],
-        "model__subsample": [0.8],
-        "model__colsample_bytree": [0.8],
-        "model__reg_lambda": [1.0, 3.0],
-    }
-    folds = KFold(n_splits=3, shuffle=True, random_state=random_state)
+        # RandomizedSearch explores the same space more efficiently than a full
+        # grid while keeping model quality high.
+        param_distributions = {
+            "model__n_estimators": [200, 300, 400],
+            "model__max_depth": [4, 5, 6, 7],
+            "model__learning_rate": [0.03, 0.05, 0.08],
+            "model__subsample": [0.85, 0.9, 1.0],
+            "model__colsample_bytree": [0.85, 0.9, 1.0],
+            "model__reg_lambda": [0.5, 1.0, 1.5],
+            "model__reg_alpha": [0.0, 0.1, 0.5],
+        }
+        folds = KFold(n_splits=3, shuffle=True, random_state=random_state)
+        cpu_threads = get_cpu_thread_count()
 
-    search = GridSearchCV(
-        estimator=model,
-        param_grid=param_grid,
-        scoring="neg_root_mean_squared_error",
-        cv=folds,
-        # GPU training should not launch many parallel fits against one laptop GPU.
-        n_jobs=1 if device == "cuda" else -1,
-        verbose=0,
-    )
-    search.fit(features, target_values)
-    return search
+        return RandomizedSearchCV(
+            estimator=model,
+            param_distributions=param_distributions,
+            n_iter=16,
+            scoring="neg_root_mean_squared_error",
+            cv=folds,
+            # GPU training should not launch many parallel fits against one laptop GPU.
+            n_jobs=1 if estimator_device == "cuda" else cpu_threads,
+            random_state=random_state,
+            verbose=0,
+        )
+
+    search = build_search(active_device)
+    started = time.perf_counter()
+    try:
+        search.fit(features, target_values)
+    except Exception as exc:
+        if active_device != "cuda":
+            raise
+        logging.warning("CUDA training failed (%s). Retrying with CPU fallback.", exc)
+        active_device = "cpu"
+        search = build_search(active_device)
+        search.fit(features, target_values)
+
+    elapsed = time.perf_counter() - started
+    logging.info("Model tuning completed in %.2f seconds on %s", elapsed, active_device)
+    return search, active_device
 
 
 def evaluate_regression(y_true: pd.Series, predictions: np.ndarray) -> dict[str, float]:
@@ -404,7 +617,12 @@ def get_feature_importance(model: Pipeline) -> pd.DataFrame:
     )
 
 
-def estimate_signed_effects(model: Pipeline, x_test: pd.DataFrame, y_test: pd.Series) -> pd.DataFrame:
+def estimate_signed_effects(
+    model: Pipeline,
+    x_test: pd.DataFrame,
+    y_test: pd.Series,
+    device: str = "cpu",
+) -> pd.DataFrame:
     """Estimate positive and negative drivers with permutation direction.
 
     Tree importance is unsigned. To explain directional effects, this function
@@ -416,15 +634,27 @@ def estimate_signed_effects(model: Pipeline, x_test: pd.DataFrame, y_test: pd.Se
     # Permutation importance answers: "How much worse does the model get if this
     # feature is shuffled?" It works on the full pipeline, so it measures raw
     # input columns instead of only post-encoding feature names.
-    result = permutation_importance(
-        model,
-        x_test,
-        y_test,
-        n_repeats=5,
-        random_state=42,
-        scoring="neg_root_mean_squared_error",
-        n_jobs=-1,
-    )
+    try:
+        result = permutation_importance(
+            model,
+            x_test,
+            y_test,
+            n_repeats=5,
+            random_state=42,
+            scoring="neg_root_mean_squared_error",
+            n_jobs=1 if device == "cuda" else get_cpu_thread_count(),
+        )
+    except Exception as exc:
+        logging.warning("Permutation importance failed (%s). Retrying serially.", exc)
+        result = permutation_importance(
+            model,
+            x_test,
+            y_test,
+            n_repeats=5,
+            random_state=42,
+            scoring="neg_root_mean_squared_error",
+            n_jobs=1,
+        )
     predictions = model.predict(x_test)
     rows = []
 
@@ -499,6 +729,7 @@ def train_xgboost_models(
 
     for target in TARGETS:
         logging.info("Training XGBoost model for %s", target)
+        started = time.perf_counter()
         features, target_values = get_feature_target_split(data, target)
         # A fixed random_state makes the train/test split reproducible for demos,
         # reports, and grading. The test set is held back until final evaluation.
@@ -509,14 +740,14 @@ def train_xgboost_models(
             random_state=random_state,
         )
 
-        search = tune_xgboost_model(x_train, y_train, random_state, device)
+        search, device_used = tune_xgboost_model(x_train, y_train, random_state, device)
         best_model = search.best_estimator_
         predictions = best_model.predict(x_test)
         metrics = evaluate_regression(y_test, predictions)
         metrics["best_cv_rmse"] = abs(search.best_score_)
 
         importance = get_feature_importance(best_model)
-        signed_effects = estimate_signed_effects(best_model, x_test, y_test)
+        signed_effects = estimate_signed_effects(best_model, x_test, y_test, device_used)
 
         model_token = safe_filename(target)
         save_pickle(paths.models / f"xgboost_{model_token}.pkl", best_model)
@@ -531,6 +762,7 @@ def train_xgboost_models(
         plot_feature_importance(importance, target, paths)
         plot_prediction_quality(y_test, predictions, target, paths)
 
+        elapsed = time.perf_counter() - started
         results[target] = ModelResult(
             target=target,
             model=best_model,
@@ -540,20 +772,19 @@ def train_xgboost_models(
             x_test_raw=x_test,
             y_test=y_test,
             predictions=predictions,
+            training_seconds=elapsed,
+            device_used=device_used,
         )
+        log_model_training_stats(target, device_used, elapsed)
 
     write_xgboost_report(results, paths)
+    write_training_summary(results, device, paths)
     return results
 
 
 def recommendation_for_target(target: str, positive_driver: str, negative_driver: str) -> str:
     """Create a practical recommendation based on model drivers."""
 
-    if target == "engagement_velocity":
-        return (
-            f"Prioritize content and response playbooks associated with {positive_driver}, "
-            f"while monitoring weak engagement signals linked to {negative_driver}."
-        )
     if target == "misinformation_probability":
         return (
             f"Escalate review queues when {positive_driver} rises, and use patterns like "
@@ -563,6 +794,51 @@ def recommendation_for_target(target: str, positive_driver: str, negative_driver
         f"Amplify credible content patterns connected to {positive_driver}, and audit "
         f"content conditions where {negative_driver} suppresses credibility."
     )
+
+
+def write_training_summary(
+    results: dict[str, ModelResult],
+    device: str,
+    paths: OutputPaths,
+) -> None:
+    """Write per-model training time and hardware usage summary."""
+
+    profile = get_training_hardware_profile()
+    gpu_name = profile["gpu_info"]["name"] if profile["gpu_info"] else "CPU-only"
+    lines = [
+        "Training Summary",
+        "================",
+        f"resolved_device={device}",
+        f"cpu_cores={profile['cpu_count']}",
+        f"cpu_threads={profile['cpu_threads']}",
+        f"gpu={gpu_name}",
+        f"peak_rss_mb={profile['peak_rss_mb']:.2f}",
+        "",
+    ]
+    if profile["gpu_info"]:
+        lines.extend(
+            [
+                f"gpu_memory_used_mb={profile['gpu_info']['memory_used_mb']}",
+                f"gpu_memory_total_mb={profile['gpu_info']['memory_total_mb']}",
+                "",
+            ]
+        )
+
+    total_seconds = 0.0
+    for target, result in results.items():
+        total_seconds += result.training_seconds
+        lines.extend(
+            [
+                TARGET_LABELS[target],
+                f"  device={result.device_used}",
+                f"  training_seconds={result.training_seconds:.2f}",
+                f"  rmse={result.metrics['rmse']:.6f}",
+                f"  r2={result.metrics['r2']:.6f}",
+                "",
+            ]
+        )
+    lines.append(f"total_xgboost_training_seconds={total_seconds:.2f}")
+    save_text(paths.reports / "training_summary.txt", "\n".join(lines))
 
 
 def write_xgboost_report(results: dict[str, ModelResult], paths: OutputPaths) -> None:
@@ -706,11 +982,12 @@ def choose_kmeans_clusters(scaled: np.ndarray, paths: OutputPaths, random_state:
     # values with inertia and silhouette score, then choose the strongest
     # silhouette score because it rewards separated, compact clusters.
     for k in candidate_ks:
-        labels = KMeans(n_clusters=k, n_init=20, random_state=random_state).fit_predict(scaled)
+        kmeans = KMeans(n_clusters=k, n_init=20, random_state=random_state)
+        labels = kmeans.fit_predict(scaled)
         rows.append(
             {
                 "k": k,
-                "inertia": KMeans(n_clusters=k, n_init=20, random_state=random_state).fit(scaled).inertia_,
+                "inertia": kmeans.inertia_,
                 "silhouette_score": silhouette_score(scaled, labels),
             }
         )
@@ -957,7 +1234,7 @@ def forecast_with_sklearn(series: pd.DataFrame, periods: int) -> pd.DataFrame:
     series["time_index"] = np.arange(len(series))
     # This fallback is not a full time-series model; it learns a simple nonlinear
     # trend from time index to value so the project still runs without Prophet.
-    model = RandomForestRegressor(n_estimators=300, random_state=42)
+    model = RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=get_cpu_thread_count())
     model.fit(series[["time_index"]], series["value"])
 
     future_index = np.arange(len(series) + periods)
@@ -1138,7 +1415,6 @@ def write_executive_summary(
     # It is meant for slides or stakeholder discussion, not model debugging.
     cluster_count = clustered["kmeans_cluster"].nunique()
     anomaly_count = len(anomalies)
-    engagement_driver = summarize_top_driver(model_results, "engagement_velocity")
     misinformation_driver = summarize_top_driver(model_results, "misinformation_probability")
     credibility_driver = summarize_top_driver(model_results, "credibility_score")
 
@@ -1150,12 +1426,13 @@ def write_executive_summary(
         last = forecast.tail(30)["yhat"].iloc[-1]
         return "upward" if last > first else "downward"
 
+    retained_targets = ", ".join(TARGET_LABELS[target] for target in model_results)
     summary = f"""
 Executive Summary
 =================
 
-1. What drives virality?
-Virality is most strongly associated with {engagement_driver}. Content teams should monitor this signal because it is the clearest modeled driver of engagement velocity.
+1. Which predictive models were retained?
+The retained workflow focuses on the strongest targets: {retained_targets}. The engagement-velocity target was removed from the production pipeline because it did not achieve a stable predictive fit and offered limited additional value over the retained models.
 
 2. What drives misinformation?
 Misinformation risk is most strongly associated with {misinformation_driver}. This signal should be prioritized in moderation queues and early-warning dashboards.
@@ -1170,10 +1447,10 @@ The segmentation model identified {cluster_count} K-Means user/post groups. Thes
 IsolationForest flagged {anomaly_count:,} unusual records. These records show rare combinations of audience size, engagement, toxicity, credibility, and misinformation risk, making them strong candidates for human review.
 
 6. What trends are expected next month?
-The forecast suggests an {forecast_direction('engagement_velocity')} engagement trend, an {forecast_direction('misinformation_probability')} misinformation trend, and an {forecast_direction('post_volume')} post-volume trend over the next 30 days.
+The forecast suggests an {forecast_direction('misinformation_probability')} misinformation trend, an {forecast_direction('credibility_score')} credibility trend, and an {forecast_direction('post_volume')} post-volume trend over the next 30 days.
 
 7. What are the most important strategic recommendations?
-- Build monitoring dashboards around the strongest engagement and misinformation drivers.
+- Build monitoring dashboards around the strongest misinformation and credibility drivers.
 - Prioritize anomalous high-risk records for analyst review.
 - Use cluster profiles to tailor crisis response messages by audience behavior.
 - Track cascade centrality because the largest cascade contains {network_result.get('largest_cascade_size', 0):,} nodes and can reveal influential propagation points.
@@ -1186,7 +1463,7 @@ def run_pipeline(
     data_path: Path,
     output_dir: Path,
     random_state: int = 42,
-    xgboost_device: str = "cuda",
+    xgboost_device: str = "auto",
 ) -> None:
     """Execute the full analytics workflow from one command."""
 
@@ -1194,14 +1471,17 @@ def run_pipeline(
     configure_logging(paths.reports)
     logging.info("Advanced analytics pipeline started")
 
+    resolved_device = resolve_xgboost_device(xgboost_device)
+    log_training_environment(resolved_device, paths)
+
     # The order matters: clean/engineer features first, then supervised models,
     # then explainability and unsupervised analyses, then the executive summary
     # that depends on all previous artifacts.
     data = load_dataset(data_path)
     data = add_engineered_features(data)
 
-    logging.info("XGBoost training device: %s", xgboost_device)
-    model_results = train_xgboost_models(data, paths, random_state, xgboost_device)
+    logging.info("XGBoost training device: %s (requested=%s)", resolved_device, xgboost_device)
+    model_results = train_xgboost_models(data, paths, random_state, resolved_device)
     run_shap_analysis(model_results, paths)
     clustered = run_clustering(data, paths, random_state)
     anomalies = run_anomaly_detection(data, paths, random_state)
@@ -1221,9 +1501,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-state", type=int, default=42, help="Reproducibility seed")
     parser.add_argument(
         "--xgboost-device",
-        choices=["cuda", "cpu"],
-        default="cuda",
-        help="Use cuda for RTX/NVIDIA GPU training or cpu for fallback runs.",
+        choices=["auto", "cuda", "cpu"],
+        default="auto",
+        help="Use auto to detect CUDA, cuda for GPU training, or cpu for fallback runs.",
     )
     return parser.parse_args()
 

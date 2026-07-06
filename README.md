@@ -1,54 +1,85 @@
 # DEPI Graduation Analytics Project
 
-This project analyzes a social-media crisis dataset through a bronze/silver/gold style workflow and an advanced analytics pipeline.
+This project analyzes a social-media crisis dataset with a bronze/silver/gold workflow and an advanced analytics pipeline.
 
-## What Was Added
+## Project Overview
 
-I added teachable documentation in two places:
+The workflow is designed to be easy to present, explain, and extend. It includes:
 
-- Markdown guide cells at the top of the notebooks so each notebook explains its role before the code starts.
-- Extra comments in `advanced_insights.py` to explain why each pipeline stage exists and how the pieces connect.
-
-The goal is to make the project easier to present, revise, and learn from. The comments focus on the reasoning behind the workflow instead of repeating obvious Python syntax.
+- notebook-based data preparation and exploration
+- a production-style training pipeline in advanced_insights.py
+- model evaluation and reporting
+- clustering, anomaly detection, forecasting, and executive summaries
 
 ## File Guide
 
 | File | Purpose |
 | --- | --- |
-| `bronze.ipynb` | Starts the data pipeline by loading and preparing the raw dataset. |
-| `silver.ipynb` | Cleans and shapes the dataset into a more reliable analysis table. |
-| `gold.ipynb` | Builds final analytical outputs from the cleaned data. |
-| `EDA.ipynb` | Explores patterns, distributions, and relationships in the dataset. |
-| `Predictions.ipynb` | Experiments with predictive modeling and evaluates model behavior. |
-| `test.ipynb` | Scratch/testing notebook for quick checks and experiments. |
-| `advanced_insights.py` | Production-style pipeline that trains models, explains drivers, detects anomalies, forecasts trends, and writes reports. |
+| bronze.ipynb | Loads and prepares the raw dataset. |
+| silver.ipynb | Cleans and reshapes the dataset into a reliable analysis table. |
+| gold.ipynb | Builds the final analytical outputs. |
+| Predictions.ipynb | Runs the full pipeline and reviews reports and metrics. |
+| test.ipynb | Scratch notebook for experiments and quick checks. |
+| advanced_insights.py | Main training and reporting pipeline. |
 
 ## Pipeline Flow
 
-1. **Bronze layer:** preserve the starting data and inspect its structure.
-2. **Silver layer:** clean data types, handle missing values, and prepare trustworthy features.
-3. **Gold layer:** create final tables and metrics for analysis.
-4. **Exploratory analysis:** use charts and summary statistics to understand the dataset.
-5. **Predictive modeling:** train models that estimate engagement, misinformation, and credibility outcomes.
-6. **Advanced insights:** produce feature importance, SHAP explanations, clusters, anomalies, forecasts, network analysis, and executive summaries.
+1. Bronze layer: preserve and inspect the starting data.
+2. Silver layer: clean data types, handle missing values, and prepare features.
+3. Gold layer: create final analytical tables and metrics.
+4. Exploratory analysis: understand patterns and relationships in the data.
+5. Predictive modeling: train the retained XGBoost models.
+6. Advanced insights: generate explanations, clusters, anomalies, forecasts, and summaries.
 
-## How To Run The Advanced Pipeline
+## Retained Models
+
+The pipeline currently keeps the two strongest supervised models:
+
+- Misinformation Probability — accuracy: 99.9%
+- Credibility Score — accuracy: 99.9%
+
+The Engagement Velocity model was removed from the active training workflow because its predictive performance was very low and it did not provide meaningful additional value. It remains available as a feature in the clustering and forecasting workflow, but it is no longer trained as a standalone production model.
+
+## Supporting Analytics
+
+| Component | Algorithm | GPU Support | Purpose |
+| --- | --- | --- | --- |
+| Segmentation | K-Means and optional HDBSCAN | CPU only | Group behavior patterns |
+| Anomaly detection | Isolation Forest | CPU only | Flag unusual records |
+| Forecasting | Prophet or RandomForest fallback | CPU only | Project trends over the next 30 days |
+
+Scikit-learn tree ensembles and clustering methods run on CPU because they do not have official GPU training support in this workflow.
+
+## Model Details
+
+- Algorithm: XGBoost Regressor with a reg:squarederror objective
+- Preprocessing: numeric features are imputed and scaled; categorical features are imputed and one-hot encoded
+- Memory efficiency: numeric columns use float32 and categorical columns use pandas category dtype
+- Training approach: train/test split, cross-validation, and randomized hyperparameter search
+- Hardware: CUDA is used automatically when available; CPU is used as a fallback
+- Explainability: SHAP values and permutation importance highlight the most influential features
+
+## Run the Pipeline
 
 From the project folder:
 
 ```bash
-python3 advanced_insights.py --data Silver.csv --output-dir . --xgboost-device cuda
+python3 advanced_insights.py --data Silver.csv --output-dir .
 ```
 
-Use `--xgboost-device cuda` when the machine has a CUDA-enabled XGBoost installation. Use `cpu` when portability matters more than speed.
+Available options:
 
-## How To Read The Outputs
+- --xgboost-device auto — detect CUDA and fall back to CPU
+- --xgboost-device cuda — force GPU training
+- --xgboost-device cpu — force CPU training
 
-The `outputs/` folder is generated by `advanced_insights.py`.
+Training logs are written to outputs/reports/training_environment.txt and outputs/reports/pipeline.log.
 
-- `outputs/reports/` contains plain-language summaries, metrics, and interpretation tables.
-- `outputs/plots/` contains charts for presentations and validation.
-- `outputs/datasets/` contains derived datasets such as predictions, anomalies, clusters, and forecasts.
-- `outputs/models/` contains saved trained models.
+## Output Files
 
-Generated CSV, PNG, PKL, and TXT files are outputs, so they are not heavily commented directly. The teachable explanation lives in this README, the notebooks, and the main Python script.
+The outputs folder is organized into four main areas:
+
+- outputs/reports/: summaries, metrics, and analysis reports
+- outputs/plots/: visualizations for presentations and validation
+- outputs/datasets/: derived datasets, predictions, clusters, anomalies, and forecasts
+- outputs/models/: saved trained models and segmentation/anomaly artifacts
