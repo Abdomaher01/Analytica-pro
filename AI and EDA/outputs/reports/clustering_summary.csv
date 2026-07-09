@@ -1,0 +1,4 @@
+kmeans_cluster,cluster_size,average_engagement,average_credibility,average_toxicity,average_misinformation
+0,39338,62.18471,0.76492155,0.2490357,0.18649489
+1,6685,253.88435,0.7572203,0.45350412,0.22064114
+2,3977,92.83831,0.30280364,0.37844354,0.771219

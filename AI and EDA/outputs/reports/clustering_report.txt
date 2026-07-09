@@ -1,0 +1,28 @@
+Clustering Report
+=================
+Optimal K-Means clusters selected by silhouette score: 3
+HDBSCAN available: yes
+
+Cluster 0
+Size: 39338
+Average engagement: 62.1847
+Average credibility: 0.7649
+Average toxicity: 0.2490
+Average misinformation: 0.1865
+Cluster contains accounts/posts with lower engagement, lower misinformation risk, above-average credibility.
+
+Cluster 1
+Size: 6685
+Average engagement: 253.8844
+Average credibility: 0.7572
+Average toxicity: 0.4535
+Average misinformation: 0.2206
+Cluster contains accounts/posts with high engagement, lower misinformation risk, above-average credibility, higher toxicity.
+
+Cluster 2
+Size: 3977
+Average engagement: 92.8383
+Average credibility: 0.3028
+Average toxicity: 0.3784
+Average misinformation: 0.7712
+Cluster contains accounts/posts with high engagement, elevated misinformation risk, weaker credibility, higher toxicity.

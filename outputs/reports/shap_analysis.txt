@@ -1,1 +1,0 @@
-SHAP is not available in this environment: Numba needs NumPy 2.4 or less. Got NumPy 2.5.

@@ -1,0 +1,79 @@
+feature,importance
+risk_minus_credibility,0.84762436
+misinformation_probability,0.14770208
+follower_count,0.0002736691
+month_June,0.00024355108
+stance_label_Criticize,0.0001857662
+topic_Service disruption,0.00018163954
+stance_label_Support,0.00016668983
+source_type_User,0.00015647682
+claim_type_Observation,0.00015515249
+reach_estimate,0.00014269094
+share_rate,0.00014251552
+toxicity_subjectivity_interaction,0.00013864083
+topic_Rumor circulation,0.0001307056
+uncertainty_index,0.00012355547
+topic_User complaints,0.00012190946
+comment_rate,0.000116124575
+comments,0.00011261725
+subjectivity_score,0.00011152528
+platform_Facebook,0.00010862652
+emotion_Confusion,9.365799e-05
+audience_size,9.247676e-05
+total_engagement,9.206501e-05
+engagement_velocity,8.1724895e-05
+stance_label_Question,8.0993064e-05
+claim_type_Fact Claim,8.078524e-05
+share_comment_ratio,7.9507874e-05
+follower_following_ratio,7.535709e-05
+following_count,7.50943e-05
+emotion_Anger,7.387097e-05
+claim_type_Rumor,7.212128e-05
+impressions_estimate,7.1729846e-05
+day_Wednesday,6.900101e-05
+source_type_Influencer,6.8757065e-05
+day_Monday,6.751159e-05
+reach_rate,6.721082e-05
+toxicity_score,6.401869e-05
+account_age_days,5.8132246e-05
+likes,5.4263917e-05
+like_rate,5.323975e-05
+shares,5.253324e-05
+sentiment_score,4.9444967e-05
+stance_label_Neutral,4.545687e-05
+platform_Twitter,4.5443845e-05
+topic_Recovery signals,4.1196156e-05
+topic_Privacy concerns,3.8792128e-05
+emotion_Frustration,3.462975e-05
+source_type_Bot,3.456807e-05
+emotion_Trust,3.2579253e-05
+day_Friday,3.208128e-05
+month_August,3.194829e-05
+platform_Reddit,2.4286373e-05
+emotion_Fear,2.2517723e-05
+day_Saturday,1.9389101e-05
+crisis_phase_Escalation,1.8095101e-05
+topic_Platform instability,1.4807721e-05
+topic_Official communication,1.22136435e-05
+cascade_depth,1.0959985e-05
+day_Thursday,9.422953e-06
+month_July,8.355326e-06
+emotion_Relief,5.0183785e-06
+is_share,2.389738e-06
+day_Tuesday,2.2771649e-06
+crisis_phase_Peak,1.7485078e-06
+verified_flag,0.0
+crisis_phase_Recovery,0.0
+crisis_phase_Pre-Crisis,0.0
+log_impressions,0.0
+year,0.0
+log_followers,0.0
+crisis_phase_Response,0.0
+sentiment_label_Negative,0.0
+claim_type_Opinion,0.0
+sentiment_label_Neutral,0.0
+sentiment_label_Positive,0.0
+region_Global,0.0
+language_English,0.0
+source_type_News Outlet,0.0
+day_Sunday,0.0
