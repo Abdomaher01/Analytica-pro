@@ -1,0 +1,30 @@
+2026-07-09 20:47:47,401 | INFO | Advanced analytics pipeline started
+2026-07-09 20:47:50,130 | INFO | Training hardware: device=cuda cpu_cores=16 cpu_threads=16 gpu=NVIDIA GeForce RTX 2050
+2026-07-09 20:47:50,132 | INFO | Current memory footprint: 422.89 MB
+2026-07-09 20:47:50,134 | INFO | GPU memory: 81 MB used / 4096 MB total
+2026-07-09 20:47:50,396 | INFO | Loaded ../Medalian/Silver.csv with shape (50000, 33)
+2026-07-09 20:47:50,514 | INFO | XGBoost training device: cuda (requested=cuda)
+2026-07-09 20:47:50,516 | INFO | Starting XGBoost insight engine
+2026-07-09 20:47:50,517 | INFO | Training XGBoost model for misinformation_probability
+2026-07-09 20:49:25,993 | INFO | Model tuning completed in 95.45 seconds on cuda
+2026-07-09 20:49:39,137 | INFO | Model misinformation_probability trained in 108.56 seconds on cuda
+2026-07-09 20:49:39,138 | INFO | Model misinformation_probability resource usage: cpu_threads=16 peak_rss_mb=588.47 gpu=NVIDIA GeForce RTX 2050
+2026-07-09 20:49:39,139 | INFO | Model misinformation_probability GPU memory: 83 MB used / 4096 MB total
+2026-07-09 20:49:39,139 | INFO | Training XGBoost model for credibility_score
+2026-07-09 20:51:10,544 | INFO | Model tuning completed in 91.39 seconds on cuda
+2026-07-09 20:51:23,692 | INFO | Model credibility_score trained in 104.49 seconds on cuda
+2026-07-09 20:51:23,693 | INFO | Model credibility_score resource usage: cpu_threads=16 peak_rss_mb=595.34 gpu=NVIDIA GeForce RTX 2050
+2026-07-09 20:51:23,694 | INFO | Model credibility_score GPU memory: 83 MB used / 4096 MB total
+2026-07-09 20:51:23,757 | INFO | Starting SHAP explainability
+2026-07-09 20:51:23,758 | WARNING | SHAP is not available in this environment: Numba needs NumPy 2.4 or less. Got NumPy 2.5.
+2026-07-09 20:51:23,759 | INFO | Starting user and post segmentation
+2026-07-09 20:59:24,282 | INFO | Starting anomaly detection
+2026-07-09 20:59:27,955 | INFO | Starting time-series forecasting
+2026-07-09 20:59:28,064 | INFO | Chain [1] start processing
+2026-07-09 20:59:28,156 | INFO | Chain [1] done processing
+2026-07-09 20:59:28,448 | INFO | Chain [1] start processing
+2026-07-09 20:59:28,543 | INFO | Chain [1] done processing
+2026-07-09 20:59:28,830 | INFO | Chain [1] start processing
+2026-07-09 20:59:28,895 | INFO | Chain [1] done processing
+2026-07-09 20:59:29,156 | INFO | Starting social network analysis
+2026-07-09 21:00:01,464 | INFO | Pipeline completed successfully. Outputs saved to outputs

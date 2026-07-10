@@ -1,0 +1,7 @@
+device=cuda
+cpu_cores=16
+cpu_threads=16
+gpu=NVIDIA GeForce RTX 2050
+peak_rss_mb=422.89
+gpu_memory_used_mb=81
+gpu_memory_total_mb=4096
