@@ -23,5 +23,5 @@ The forecast suggests an downward misinformation trend, an stable credibility tr
 - Build monitoring dashboards around the strongest misinformation and credibility drivers.
 - Prioritize anomalous high-risk records for analyst review.
 - Use cluster profiles to tailor crisis response messages by audience behavior.
-- Track cascade centrality because the largest cascade contains 22 nodes and can reveal influential propagation points.
+- Monitor engagement and credibility trends to detect emerging crises.
 - Re-run this pipeline after each major crisis phase to keep forecasts and model explanations current.
