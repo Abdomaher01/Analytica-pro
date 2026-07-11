@@ -5,6 +5,7 @@ models, generates reports, and saves publication-ready plots and datasets.
 # Importing modules
 from __future__ import annotations
 import argparse
+import json
 import logging
 import math
 import os
@@ -25,15 +26,26 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering, DBSCAN, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import IsolationForest, RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
+    average_precision_score,
+    calinski_harabasz_score,
+    classification_report,
+    confusion_matrix,
+    davies_bouldin_score,
+    f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_recall_curve,
+    precision_score,
     r2_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
     silhouette_score,
 )
 from joblib import Memory
@@ -970,6 +982,95 @@ def prepare_scaled_matrix(data: pd.DataFrame, columns: list[str]) -> tuple[pd.Da
     return imputed, scaled
 
 
+def _safe_cluster_metrics(matrix: np.ndarray, labels: np.ndarray, model_name: str, cluster_count: int) -> dict[str, float]:
+    """Return cluster evaluation metrics when the label structure is valid."""
+
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2 or len(matrix) < 4:
+        return {
+            "model_name": model_name,
+            "cluster_count": int(cluster_count),
+            "silhouette_score": np.nan,
+            "davies_bouldin_index": np.nan,
+            "calinski_harabasz_score": np.nan,
+            "inertia": np.nan,
+        }
+
+    metrics = {
+        "model_name": model_name,
+        "cluster_count": int(cluster_count),
+        "silhouette_score": float(silhouette_score(matrix, labels)),
+        "davies_bouldin_index": float(davies_bouldin_score(matrix, labels)),
+        "calinski_harabasz_score": float(calinski_harabasz_score(matrix, labels)),
+    }
+    if model_name == "K-Means":
+        metrics["inertia"] = float(np.nan)
+    return metrics
+
+
+def evaluate_clustering_models(
+    data: np.ndarray | pd.DataFrame,
+    random_state: int = 42,
+    paths: OutputPaths | None = None,
+    cluster_count: int | None = None,
+) -> pd.DataFrame:
+    """Evaluate K-Means, Agglomerative Clustering, and DBSCAN with standard metrics."""
+
+    matrix = np.asarray(data, dtype=float)
+    if matrix.ndim != 2:
+        raise ValueError("Clustering evaluation expects a 2D feature matrix.")
+
+    if cluster_count is None:
+        cluster_count = min(4, max(2, min(matrix.shape[0] - 1, 6)))
+
+    rows: list[dict[str, float | str | int]] = []
+
+    kmeans_model = KMeans(n_clusters=cluster_count, n_init=20, random_state=random_state)
+    kmeans_model.fit(matrix)
+    kmeans_metrics = _safe_cluster_metrics(matrix, kmeans_model.labels_, "K-Means", cluster_count)
+    kmeans_metrics["inertia"] = float(kmeans_model.inertia_)
+    rows.append(kmeans_metrics)
+
+    agglomerative_model = AgglomerativeClustering(n_clusters=cluster_count)
+    agglomerative_labels = agglomerative_model.fit_predict(matrix)
+    rows.append(_safe_cluster_metrics(matrix, agglomerative_labels, "Agglomerative Clustering", cluster_count))
+
+    try:
+        dbscan_model = DBSCAN(eps=0.75, min_samples=max(3, int(matrix.shape[0] * 0.02)))
+        dbscan_labels = dbscan_model.fit_predict(matrix)
+        rows.append(_safe_cluster_metrics(matrix, dbscan_labels, "DBSCAN", len(np.unique(dbscan_labels))))
+    except Exception:
+        rows.append(
+            {
+                "model_name": "DBSCAN",
+                "cluster_count": 0,
+                "silhouette_score": np.nan,
+                "davies_bouldin_index": np.nan,
+                "calinski_harabasz_score": np.nan,
+                "inertia": np.nan,
+            }
+        )
+
+    comparison = pd.DataFrame(rows)
+    if "inertia" not in comparison.columns:
+        comparison["inertia"] = np.nan
+    comparison["is_best"] = False
+    ranking = comparison.sort_values(
+        ["silhouette_score", "davies_bouldin_index", "calinski_harabasz_score"],
+        ascending=[False, True, False],
+        na_position="last",
+    )
+    if not ranking.empty:
+        comparison.loc[ranking.index[0], "is_best"] = True
+
+    if paths is not None:
+        comparison.to_csv(paths.reports / "clustering_model_comparison.csv", index=False)
+        with (paths.reports / "clustering_model_comparison.json").open("w", encoding="utf-8") as handle:
+            json.dump(comparison.to_dict(orient="records"), handle, indent=2)
+
+    return comparison
+
+
 def choose_kmeans_clusters(scaled: np.ndarray, paths: OutputPaths, random_state: int) -> tuple[int, pd.DataFrame]:
     """Select K using silhouette score and save elbow diagnostics."""
 
@@ -1113,6 +1214,19 @@ def run_clustering(data: pd.DataFrame, paths: OutputPaths, random_state: int) ->
                 "",
             ]
         )
+
+    clustering_comparison = evaluate_clustering_models(scaled, random_state=random_state, paths=paths, cluster_count=best_k)
+    comparison_lines = [
+        "",
+        "Clustering Performance Evaluation",
+        "================================",
+        "This section compares clustering algorithms using silhouette, Davies-Bouldin, Calinski-Harabasz, and inertia metrics.",
+        "Higher silhouette and Calinski-Harabasz scores are better; lower Davies-Bouldin and inertia are better.",
+        clustering_comparison.to_string(index=False),
+        "",
+        f"Best-performing clustering model: {clustering_comparison.loc[clustering_comparison['is_best'], 'model_name'].iloc[0]}",
+    ]
+    report_lines.extend(comparison_lines)
     save_text(paths.reports / "clustering_report.txt", "\n".join(report_lines))
     return clustered
 
@@ -1134,13 +1248,53 @@ def explain_anomaly_reasons(row: pd.Series, thresholds: pd.Series) -> str:
     return "; ".join(reasons)
 
 
+def evaluate_anomaly_models(
+    true_labels: np.ndarray | pd.Series | None,
+    anomaly_scores: np.ndarray | pd.Series,
+    predicted_labels: np.ndarray | pd.Series | None = None,
+) -> dict[str, Any]:
+    """Evaluate anomaly detection performance when ground-truth labels are available."""
+
+    if true_labels is None:
+        raise ValueError("Ground-truth labels are required for supervised anomaly evaluation.")
+
+    y_true = np.asarray(true_labels).ravel()
+    scores = np.asarray(anomaly_scores).ravel()
+    if predicted_labels is None:
+        predicted_labels = np.where(scores >= np.median(scores), 1, 0)
+    y_pred = np.asarray(predicted_labels).ravel()
+
+    y_true_binary = np.where(y_true == -1, 1, 0)
+    y_pred_binary = np.where(y_pred == -1, 1, 0)
+    if y_pred_binary.ndim != 1:
+        y_pred_binary = y_pred_binary.ravel()
+
+    precision = precision_score(y_true_binary, y_pred_binary, zero_division=0)
+    recall = recall_score(y_true_binary, y_pred_binary, zero_division=0)
+    f1 = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+    confusion = confusion_matrix(y_true_binary, y_pred_binary, labels=[0, 1])
+    roc_auc = float("nan")
+    average_precision = float("nan")
+
+    if len(np.unique(y_true_binary)) == 2 and len(np.unique(scores)) > 1:
+        roc_auc = roc_auc_score(y_true_binary, scores)
+        average_precision = average_precision_score(y_true_binary, scores)
+
+    return {
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1_score": float(f1),
+        "roc_auc": float(roc_auc),
+        "average_precision": float(average_precision),
+        "confusion_matrix": confusion,
+    }
+
+
 def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: int) -> pd.DataFrame:
     """Detect suspicious accounts, unusual posts, and engagement spikes."""
 
     logging.info("Starting anomaly detection")
     numeric_data, scaled = prepare_scaled_matrix(data, CLUSTER_FEATURES)
-    # IsolationForest works well for rare-pattern detection because it tries to
-    # isolate unusual rows quickly across many random trees.
     model = IsolationForest(
         n_estimators=300,
         contamination="auto",
@@ -1164,10 +1318,18 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
 
     anomalies = scored[scored["anomaly_label"] == -1].sort_values("anomaly_score")
     anomalies.to_csv(paths.datasets / "anomalies.csv", index=False)
-    pd.DataFrame({"anomaly_count": [len(anomalies)], "total_records": [len(scored)]}).to_csv(
-        paths.reports / "anomaly_metrics.csv",
-        index=False,
-    )
+
+    stats = {
+        "anomaly_count": int(len(anomalies)),
+        "total_records": int(len(scored)),
+        "anomaly_percentage": round((len(anomalies) / len(scored)) * 100 if len(scored) else 0.0, 2),
+        "score_min": float(scores.min()),
+        "score_max": float(scores.max()),
+        "score_mean": float(scores.mean()),
+        "score_median": float(np.median(scores)),
+        "score_std": float(scores.std()),
+    }
+    pd.DataFrame([stats]).to_csv(paths.reports / "anomaly_metrics.csv", index=False)
 
     plt.figure(figsize=(9, 7))
     sns.scatterplot(
@@ -1182,19 +1344,88 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
     plt.savefig(paths.plots / "anomalies_engagement_misinformation.png", dpi=200)
     plt.close()
 
+    plt.figure(figsize=(8, 5))
+    sns.histplot(scored["anomaly_score"], kde=True, bins=20)
+    plt.title("IsolationForest Anomaly Score Distribution")
+    plt.xlabel("Anomaly score")
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig(paths.plots / "anomaly_score_distribution.png", dpi=200)
+    plt.close()
+
     top_reasons = anomalies["anomaly_reason"].value_counts().head(10)
-    report = [
+
+    report_lines = [
         "Anomaly Detection Report",
         "========================",
         f"Flagged records: {len(anomalies):,} of {len(scored):,}",
+        f"Detected anomaly percentage: {stats['anomaly_percentage']:.2f}%",
+        f"Anomaly score statistics: min={stats['score_min']:.4f}, max={stats['score_max']:.4f}, mean={stats['score_mean']:.4f}, median={stats['score_median']:.4f}, std={stats['score_std']:.4f}",
         "",
         "Most common anomaly reasons:",
         top_reasons.to_string(),
         "",
         "Records are flagged by IsolationForest when their combined account, engagement, credibility, toxicity, and misinformation profile is rare compared with the rest of the dataset.",
+        "",
+        "Anomaly Detection Performance Evaluation",
+        "======================================",
+        "Supervised anomaly metrics are skipped unless labeled anomalies are provided in the dataset.",
     ]
-    save_text(paths.reports / "anomaly_report.txt", "\n".join(report))
-    return anomalies
+
+    ground_truth_column = None
+    for candidate in ["is_anomaly", "anomaly_ground_truth", "ground_truth_anomaly", "anomaly_true", "ground_truth_label"]:
+        if candidate in data.columns:
+            ground_truth_column = candidate
+            break
+
+    if ground_truth_column is not None:
+        ground_truth = pd.to_numeric(data[ground_truth_column], errors="coerce").fillna(0)
+        metrics = evaluate_anomaly_models(ground_truth, scored["anomaly_score"], scored["anomaly_label"])
+        confusion = pd.DataFrame(metrics["confusion_matrix"], index=["normal", "anomaly"], columns=["predicted_normal", "predicted_anomaly"])
+        confusion.to_csv(paths.reports / "anomaly_confusion_matrix.csv")
+        pd.DataFrame([metrics]).to_csv(paths.reports / "anomaly_supervised_metrics.csv", index=False)
+        report_lines.extend(
+            [
+                "Supervised evaluation metrics:",
+                f"Precision: {metrics['precision']:.4f}",
+                f"Recall: {metrics['recall']:.4f}",
+                f"F1-score: {metrics['f1_score']:.4f}",
+                f"ROC-AUC: {metrics['roc_auc']:.4f}",
+                f"Average Precision: {metrics['average_precision']:.4f}",
+                "",
+                "Confusion matrix:",
+                confusion.to_string(),
+            ]
+        )
+        if len(np.unique(ground_truth)) > 1 and len(np.unique(scored["anomaly_score"])) > 1:
+            fpr, tpr, _ = roc_curve(np.where(ground_truth == -1, 1, 0), scored["anomaly_score"])
+            precision_values, recall_values, _ = precision_recall_curve(np.where(ground_truth == -1, 1, 0), scored["anomaly_score"])
+            plt.figure(figsize=(6, 5))
+            plt.plot(fpr, tpr, label="ROC")
+            plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
+            plt.title("ROC Curve")
+            plt.tight_layout()
+            plt.savefig(paths.plots / "anomaly_roc_curve.png", dpi=200)
+            plt.close()
+
+            plt.figure(figsize=(6, 5))
+            plt.plot(recall_values, precision_values, label="Precision-Recall")
+            plt.title("Precision-Recall Curve")
+            plt.xlabel("Recall")
+            plt.ylabel("Precision")
+            plt.tight_layout()
+            plt.savefig(paths.plots / "anomaly_precision_recall_curve.png", dpi=200)
+            plt.close()
+
+            report_lines.extend(["ROC and precision-recall curves were saved to the plots directory."])
+    else:
+        report_lines.extend([
+            "No labeled anomaly column was found, so supervised metrics could not be computed.",
+            "The unsupervised summary above captures the anomaly count, scores, and reasons instead.",
+        ])
+
+    save_text(paths.reports / "anomaly_report.txt", "\n".join(report_lines))
+    return scored
 
 
 def aggregate_daily_metrics(data: pd.DataFrame) -> pd.DataFrame:

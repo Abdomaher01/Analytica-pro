@@ -1,29 +1,13 @@
-2026-07-10 14:07:58,042 | INFO | Advanced analytics pipeline started
-2026-07-10 14:08:00,725 | INFO | Training hardware: device=cuda cpu_cores=16 cpu_threads=16 gpu=NVIDIA GeForce RTX 2050
-2026-07-10 14:08:00,726 | INFO | Current memory footprint: 434.57 MB
-2026-07-10 14:08:00,728 | INFO | GPU memory: 81 MB used / 4096 MB total
-2026-07-10 14:08:00,908 | INFO | Loaded ../Medalian/Silver.csv with shape (50000, 33)
-2026-07-10 14:08:00,994 | INFO | XGBoost training device: cuda (requested=cuda)
-2026-07-10 14:08:00,995 | INFO | Starting XGBoost insight engine
-2026-07-10 14:08:00,996 | INFO | Training XGBoost model for misinformation_probability
-2026-07-10 14:09:39,234 | INFO | Model tuning completed in 100.77 seconds on cuda
-2026-07-10 14:09:53,033 | INFO | Model misinformation_probability trained in 115.40 seconds on cuda
-2026-07-10 14:09:53,034 | INFO | Model misinformation_probability resource usage: cpu_threads=16 peak_rss_mb=580.45 gpu=NVIDIA GeForce RTX 2050
-2026-07-10 14:09:53,035 | INFO | Model misinformation_probability GPU memory: 83 MB used / 4096 MB total
-2026-07-10 14:09:53,035 | INFO | Training XGBoost model for credibility_score
-2026-07-10 14:11:31,496 | INFO | Model tuning completed in 101.01 seconds on cuda
-2026-07-10 14:11:45,624 | INFO | Model credibility_score trained in 115.10 seconds on cuda
-2026-07-10 14:11:45,625 | INFO | Model credibility_score resource usage: cpu_threads=16 peak_rss_mb=591.83 gpu=NVIDIA GeForce RTX 2050
-2026-07-10 14:11:45,626 | INFO | Model credibility_score GPU memory: 83 MB used / 4096 MB total
-2026-07-10 14:11:45,696 | INFO | Starting SHAP explainability
-2026-07-10 14:11:45,697 | WARNING | SHAP is not available in this environment: Numba needs NumPy 2.4 or less. Got NumPy 2.5.
-2026-07-10 14:11:45,699 | INFO | Starting user and post segmentation
-2026-07-10 14:21:29,706 | INFO | Starting anomaly detection
-2026-07-10 14:21:34,165 | INFO | Starting time-series forecasting
-2026-07-10 14:21:34,235 | INFO | Chain [1] start processing
-2026-07-10 14:21:34,329 | INFO | Chain [1] done processing
-2026-07-10 14:21:34,692 | INFO | Chain [1] start processing
-2026-07-10 14:21:34,798 | INFO | Chain [1] done processing
-2026-07-10 14:21:35,142 | INFO | Chain [1] start processing
-2026-07-10 14:21:35,203 | INFO | Chain [1] done processing
-2026-07-10 14:21:35,548 | INFO | Pipeline completed successfully. Outputs saved to outputs
+2026-07-11 14:48:17,668 | INFO | Advanced analytics pipeline started
+2026-07-11 14:48:18,561 | INFO | Training hardware: device=cuda cpu_cores=16 cpu_threads=16 gpu=NVIDIA GeForce RTX 2050
+2026-07-11 14:48:18,563 | INFO | Current memory footprint: 412.00 MB
+2026-07-11 14:48:18,567 | INFO | GPU memory: 275 MB used / 4096 MB total
+2026-07-11 14:48:18,761 | INFO | Loaded ../Medalian/Silver.csv with shape (50000, 33)
+2026-07-11 14:48:18,861 | INFO | XGBoost training device: cuda (requested=cuda)
+2026-07-11 14:48:18,863 | INFO | Starting XGBoost insight engine
+2026-07-11 14:48:18,864 | INFO | Training XGBoost model for misinformation_probability
+2026-07-11 14:50:17,371 | INFO | Model tuning completed in 123.23 seconds on cuda
+2026-07-11 14:50:38,237 | INFO | Model misinformation_probability trained in 145.22 seconds on cuda
+2026-07-11 14:50:38,238 | INFO | Model misinformation_probability resource usage: cpu_threads=16 peak_rss_mb=557.93 gpu=NVIDIA GeForce RTX 2050
+2026-07-11 14:50:38,239 | INFO | Model misinformation_probability GPU memory: 277 MB used / 4096 MB total
+2026-07-11 14:50:38,240 | INFO | Training XGBoost model for credibility_score
