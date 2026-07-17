@@ -10,9 +10,7 @@ import logging
 import math
 import os
 import pickle
-import shutil
 import subprocess
-import sys
 import time
 import warnings
 from contextlib import contextmanager
@@ -275,10 +273,7 @@ def resolve_xgboost_device(requested: str = "cuda") -> str:
     if XGBRegressor is None:
         return "cpu"
 
-    if requested == "cuda":
-        candidate = "cuda"
-    else:
-        candidate = "cuda"
+    candidate = "cuda"
 
     try:
         probe = XGBRegressor(
@@ -1943,23 +1938,6 @@ def run_clustering(
     report_lines.extend(comparison_lines)
     save_text(get_model_output_dir(paths, "kmeans", "reports") / "clustering_report.txt", "\n".join(report_lines))
     return clustered
-
-
-def explain_anomaly_reasons(row: pd.Series, thresholds: pd.Series) -> str:
-    """Explain why IsolationForest may have flagged a record."""
-
-    reasons = []
-    if row["engagement_velocity"] > thresholds["engagement_velocity"]:
-        reasons.append("abnormal engagement spike")
-    if row["misinformation_probability"] > thresholds["misinformation_probability"]:
-        reasons.append("high misinformation probability")
-    if row["toxicity_score"] > thresholds["toxicity_score"]:
-        reasons.append("high toxicity")
-    if row["follower_count"] > thresholds["follower_count"]:
-        reasons.append("unusually large audience")
-    if not reasons:
-        reasons.append("unusual multivariate behavior across account and post metrics")
-    return "; ".join(reasons)
 
 
 def evaluate_anomaly_models(
