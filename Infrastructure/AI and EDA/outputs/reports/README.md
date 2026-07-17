@@ -1,4 +1,4 @@
-# DEPI Graduation Analytics Project
+# Social Media Crisis Analytics Project
 
 ## Executive Summary
 

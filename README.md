@@ -1,4 +1,4 @@
-# DEPI Graduation Analytics Project
+# Social Media Crisis Analytics Project
 
 **Production-Ready Crisis Analytics Platform**
 
@@ -9,15 +9,16 @@ A complete end-to-end data science pipeline for analyzing social media crisis da
 ## Table of Contents
 
 1. [Project Overview](#project-overview)
-2. [Full Architecture](#full-architecture)
-3. [Pipeline Description](#pipeline-description)
-4. [Models](#models)
-5. [Performance Metrics](#performance-metrics)
-6. [Data Dictionary](#data-dictionary)
-7. [Code Quality & Production Readiness](#code-quality--production-readiness)
-8. [Project Structure](#project-structure)
-9. [How to Run](#how-to-run)
-10. [Technical Documentation](#technical-documentation)
+2. [Full Project Landscape](#full-project-landscape)
+3. [End-to-End Architecture](#end-to-end-architecture)
+4. [Pipeline Description](#pipeline-description)
+5. [Models](#models)
+6. [Performance Metrics](#performance-metrics)
+7. [Data Dictionary](#data-dictionary)
+8. [Code Quality & Production Readiness](#code-quality--production-readiness)
+9. [Project Structure](#project-structure)
+10. [How to Run](#how-to-run)
+11. [Technical Documentation](#technical-documentation)
 
 ---
 
@@ -41,6 +42,49 @@ This project analyzes social media crisis datasets to:
 - Detect emerging trends and unusual patterns before they escalate
 - Provide explainable, transparent insights that stakeholders can trust and act on
 
+### Full Project Landscape
+
+This project is not only an ML experiment. It is a complete decision-support ecosystem for monitoring, analyzing, and responding to online crisis signals.
+
+From a broader perspective, the system covers five connected layers:
+
+1. **Business Context**
+   - Crisis monitoring and response planning
+   - Stakeholder communication and operational triage
+   - Risk prioritization and escalation workflows
+
+2. **Data Landscape**
+   - Raw social media data collection and ingestion
+   - Curated datasets prepared through bronze, silver, and gold stages
+   - Feature-rich analytical tables for downstream analysis
+
+3. **Engineering & Preparation**
+   - Notebook-based exploration and documentation
+   - Data cleaning, enrichment, and transformation
+   - Reusable features and standardized output artifacts
+
+4. **Analytics & Intelligence**
+   - Predictive modeling for misinformation and credibility
+   - Segmentation and anomaly detection
+   - Forecasting and explainability for decision support
+
+5. **Reporting & Action**
+   - Executive summaries and detailed insight reports
+   - Visual evidence for presentations and reviews
+   - Structured outputs that support operational response
+
+In short, this repository connects data engineering, analytics, reporting, and decision-making in one workflow. The AI components are an important part of that workflow, but they sit inside a larger platform for understanding and acting on crisis patterns.
+
+### Repository Components
+
+This repository contains three major workstreams:
+
+- **Data engineering and preparation**: Notebooks that preserve raw inputs, clean and validate data, and build analytics-ready tables.
+- **Analytics execution**: `advanced_insights.py` is the production engine that trains models, generates insights, and writes reusable output artifacts.
+- **Reporting and review**: Generated reports, plots, datasets, and summaries that support operational decision-making and stakeholder review.
+
+Each component is designed to be auditable, repeatable, and useful to both data engineers and decision-makers.
+
 ### Dataset Description
 
 **Source:** Silver.csv (cleaned and prepared via Bronze → Silver → Gold pipeline)
@@ -59,113 +103,65 @@ This project analyzes social media crisis datasets to:
 
 ---
 
-## Full Architecture
+## End-to-End Architecture
 
 ```
-Raw Data (CSV)
+Business Problem & Stakeholders
     ↓
-┌─────────────────────────────────────────┐
-│  BRONZE LAYER (bronze.ipynb)            │
-│  • Load raw dataset                      │
-│  • Preserve original structure           │
-│  • Document data dictionary              │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  1. DATA SOURCES & CONTEXT                  │
+│  • Raw social media data                    │
+│  • Metadata, engagement signals            │
+│  • Crisis context and operational labels   │
+└────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────────────┐
-│  SILVER LAYER (silver.ipynb)            │
-│  • Type enforcement (numeric, categorical)
-│  • Missing value handling                │
-│  • Outlier detection & treatment         │
-│  • Feature normalization                 │
-│  • Data quality assurance                │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  2. DATA ENGINEERING & GOVERNANCE          │
+│  • Bronze: preserve raw inputs             │
+│  • Silver: clean, validate, enrich         │
+│  • Gold: structure analytical datasets     │
+│  • Quality checks and documentation         │
+└────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────────────┐
-│  GOLD LAYER (gold.ipynb)                │
-│  • Dimensional model (star schema)       │
-│  • Fact & dimension tables               │
-│  • Surrogate key assignment              │
-│  • Final analytics-ready dataset         │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  3. ANALYTICS & INTELLIGENCE LAYER         │
+│  • Predictive models (XGBoost)             │
+│  • Explainability (SHAP)                   │
+│  • Segmentation & clustering               │
+│  • Anomaly detection                        │
+│  • Forecasting and trend analysis          │
+└────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────────────┐
-│  EDA (Predictions.ipynb)                │
-│  • Exploratory data analysis             │
-│  • Pattern discovery                     │
-│  • Relationship visualization            │
-│  • Statistical summaries                 │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  4. REPORTING & DECISION SUPPORT          │
+│  • Executive summaries                     │
+│  • Insights reports                         │
+│  • Visual analytics and interpretation     │
+│  • Recommendations for action              │
+└────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────────────────────────────┐
-│  AI ANALYTICS ENGINE (advanced_insights.py)             │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 1. XGBoost Predictive Modeling              │       │
-│  │    ├─ Target 1: Misinformation Probability │       │
-│  │    └─ Target 2: Credibility Score          │       │
-│  │    Features:                                │       │
-│  │    • RandomizedSearchCV hyperparameter tune│       │
-│  │    • 2-fold cross-validation                │       │
-│  │    • GPU acceleration (CUDA auto-detect)   │       │
-│  │    • Feature importance extraction          │       │
-│  └─────────────────────────────────────────────┘       │
-│                    ↓                                    │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 2. SHAP Explainability Analysis             │       │
-│  │    ├─ TreeExplainer on test set             │       │
-│  │    ├─ Summary plots (force & dependence)    │       │
-│  │    └─ Feature attribution scores            │       │
-│  └─────────────────────────────────────────────┘       │
-│                    ↓                                    │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 3. Clustering & Segmentation                │       │
-│  │    ├─ K-Means with automatic K selection    │       │
-│  │    ├─ Silhouette score-based evaluation     │       │
-│  │    ├─ Optional HDBSCAN for density clusters │       │
-│  │    └─ Cluster interpretation                │       │
-│  └─────────────────────────────────────────────┘       │
-│                    ↓                                    │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 4. Anomaly Detection                        │       │
-│  │    ├─ IsolationForest on 10-dim feature set │       │
-│  │    ├─ Contamination auto-detection          │       │
-│  │    ├─ Reason explanations per anomaly       │       │
-│  │    └─ ROC/PR curve evaluation               │       │
-│  └─────────────────────────────────────────────┘       │
-│                    ↓                                    │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 5. Time Series Forecasting                  │       │
-│  │    ├─ Prophet (preferred) or RandomForest   │       │
-│  │    ├─ Daily aggregation                     │       │
-│  │    ├─ 30-day forward forecast               │       │
-│  │    └─ Prediction intervals (95% CI)         │       │
-│  └─────────────────────────────────────────────┘       │
-│                    ↓                                    │
-│  ┌─────────────────────────────────────────────┐       │
-│  │ 6. Reporting & Insights                     │       │
-│  │    ├─ Executive summary                     │       │
-│  │    ├─ Model metrics & evaluation            │       │
-│  │    ├─ Feature driver identification         │       │
-│  │    ├─ Cluster profiles & recommendations    │       │
-│  │    └─ Forecast trends & implications        │       │
-│  └─────────────────────────────────────────────┘       │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-    ↓
-┌──────────────────────────────────────┐
-│  OUTPUTS (outputs/ directory)        │
-│  ├─ models/          (*.pkl files)   │
-│  ├─ plots/           (*.png charts)  │
-│  ├─ reports/         (*.txt/*.md)    │
-│  ├─ datasets/        (*.csv data)    │
-│  └─ checkpoint.json  (resume state)  │
-└──────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│  5. OPERATIONAL OUTCOMES                  │
+│  • Risk triage                              │
+│  • Content review prioritization            │
+│  • Strategy refinement and monitoring      │
+│  • Feedback loop for future retraining     │
+└────────────────────────────────────────────┘
 ```
+
+This architecture shows that the project is meant to support a full cycle: data preparation, analysis, interpretation, and action. The AI models are one part of that cycle, not the whole solution.
 
 ---
 
 ## Pipeline Description
+
+This section walks through the full workflow from data preparation to analytics and reporting. The first stages cover data engineering and preparation, and the later stages describe the advanced analytics engine.
+
+### Workflow Summary
+
+- **Notebook-based data preparation**: `bronze.ipynb`, `silver.ipynb`, and `gold.ipynb` preserve, clean, and structure the dataset.
+- **Analytics execution**: `advanced_insights.py` reads the gold dataset and produces models, segments, anomalies, forecasts, and insights.
+- **Reporting and outputs**: Reports, plots, datasets, and model artifacts are written to the `outputs/` folder for review and operational use.
 
 ### Stage 1: Data Loading & Validation
 **File:** `advanced_insights.py::load_dataset()`
