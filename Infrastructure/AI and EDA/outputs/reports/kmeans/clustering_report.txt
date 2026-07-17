@@ -1,0 +1,40 @@
+Clustering Report
+=================
+Optimal K-Means clusters selected by silhouette score: 3
+HDBSCAN available: yes
+
+Cluster 0
+Size: 39352
+Average engagement: 62.2760
+Average credibility: 0.7649
+Average toxicity: 0.2491
+Average misinformation: 0.1865
+Cluster contains accounts/posts with lower engagement, lower misinformation risk, above-average credibility.
+
+Cluster 1
+Size: 6673
+Average engagement: 253.6929
+Average credibility: 0.7571
+Average toxicity: 0.4536
+Average misinformation: 0.2208
+Cluster contains accounts/posts with high engagement, lower misinformation risk, above-average credibility, higher toxicity.
+
+Cluster 2
+Size: 3975
+Average engagement: 92.8496
+Average credibility: 0.3028
+Average toxicity: 0.3783
+Average misinformation: 0.7713
+Cluster contains accounts/posts with high engagement, elevated misinformation risk, weaker credibility, higher toxicity.
+
+
+Clustering Performance Evaluation
+================================
+This section compares clustering algorithms using silhouette, Davies-Bouldin, Calinski-Harabasz, and inertia metrics.
+Higher silhouette and Calinski-Harabasz scores are better; lower Davies-Bouldin and inertia are better.
+              model_name  cluster_count  silhouette_score  davies_bouldin_index  calinski_harabasz_score  silhouette_sampled  silhouette_sample_size     inertia    skipped_reason  is_best
+                 K-Means              3          0.312667              1.740276               1517.35673               False                   10000 77882.09375               NaN     True
+Agglomerative Clustering              3               NaN                   NaN                      NaN               False                       0         NaN dataset_too_large    False
+                  DBSCAN              1               NaN                   NaN                      NaN               False                       0         NaN               NaN    False
+
+Best-performing clustering model: K-Means

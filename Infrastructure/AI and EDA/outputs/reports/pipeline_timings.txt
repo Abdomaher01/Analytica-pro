@@ -1,0 +1,16 @@
+Pipeline Stage Timings
+======================
+
+environment_setup: 0.06s
+data_loading: 0.11s
+feature_engineering: 0.01s
+model_training: 56.03s
+shap_explainability: 0.00s
+preprocessing: 0.03s
+clustering_training: 73.10s
+anomaly_detection: 4.29s
+forecasting: 1.81s
+executive_summary: 0.00s
+insights_reporting: 0.02s
+
+total_logged_seconds: 135.46

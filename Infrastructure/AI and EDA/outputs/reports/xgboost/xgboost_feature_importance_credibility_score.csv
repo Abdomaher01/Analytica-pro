@@ -1,0 +1,79 @@
+feature,importance
+risk_minus_credibility,0.8517174
+misinformation_probability,0.14601727
+stance_label_Criticize,9.737092e-05
+topic_Service disruption,8.73144e-05
+follower_count,8.673743e-05
+month_August,8.656352e-05
+stance_label_Support,7.779891e-05
+topic_User complaints,7.271624e-05
+reach_estimate,6.487908e-05
+impressions_estimate,6.391551e-05
+audience_size,5.6852125e-05
+subjectivity_score,5.197754e-05
+total_engagement,5.1837626e-05
+day_Friday,5.117119e-05
+source_type_User,5.0580864e-05
+day_Thursday,4.9016726e-05
+following_count,4.8361362e-05
+share_rate,4.595696e-05
+crisis_phase_Escalation,4.5770208e-05
+like_rate,4.4855908e-05
+toxicity_subjectivity_interaction,4.404933e-05
+uncertainty_index,4.374871e-05
+is_share,4.2042564e-05
+comment_rate,4.1800147e-05
+source_type_Bot,4.15009e-05
+engagement_velocity,4.0374776e-05
+day_Sunday,3.845754e-05
+comments,3.8245722e-05
+toxicity_score,3.8157898e-05
+reach_rate,3.6446898e-05
+platform_Facebook,3.5148165e-05
+follower_following_ratio,3.46895e-05
+share_comment_ratio,3.3081822e-05
+account_age_days,3.2613774e-05
+topic_Official communication,3.0581705e-05
+stance_label_Question,3.0545736e-05
+source_type_Influencer,2.9880208e-05
+shares,2.9652798e-05
+day_Saturday,2.9568851e-05
+claim_type_Fact Claim,2.9563838e-05
+sentiment_score,2.6509859e-05
+day_Monday,2.5387642e-05
+topic_Recovery signals,2.3885039e-05
+topic_Privacy concerns,2.1463817e-05
+claim_type_Observation,2.0910042e-05
+stance_label_Neutral,2.0043253e-05
+crisis_phase_Peak,2.0004798e-05
+cascade_depth,1.9843075e-05
+claim_type_Rumor,1.9263176e-05
+topic_Platform instability,1.8396884e-05
+month_July,1.6948556e-05
+emotion_Anger,1.6331276e-05
+likes,1.5930196e-05
+day_Wednesday,1.5880332e-05
+topic_Rumor circulation,1.5027181e-05
+emotion_Frustration,1.400651e-05
+crisis_phase_Recovery,1.38227115e-05
+emotion_Confusion,1.3662271e-05
+source_type_News Outlet,1.3589944e-05
+claim_type_Opinion,1.3449087e-05
+platform_Reddit,1.0650187e-05
+day_Tuesday,9.802447e-06
+platform_Twitter,9.045096e-06
+emotion_Relief,7.3142455e-06
+month_June,5.8984747e-06
+emotion_Trust,4.281771e-06
+verified_flag,0.0
+year,0.0
+log_impressions,0.0
+log_followers,0.0
+sentiment_label_Negative,0.0
+crisis_phase_Response,0.0
+crisis_phase_Pre-Crisis,0.0
+emotion_Fear,0.0
+sentiment_label_Neutral,0.0
+sentiment_label_Positive,0.0
+region_Global,0.0
+language_English,0.0

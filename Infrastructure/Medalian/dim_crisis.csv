@@ -1,0 +1,6 @@
+crisis_phase,crisis_phase_id
+Escalation,1
+Recovery,2
+Peak,3
+Response,4
+Pre-Crisis,5

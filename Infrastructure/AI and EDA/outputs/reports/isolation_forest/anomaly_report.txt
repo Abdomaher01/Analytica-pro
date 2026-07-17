@@ -1,0 +1,26 @@
+Anomaly Detection Report
+========================
+Flagged records: 8,781 of 50,000
+Detected anomaly percentage: 17.56%
+Anomaly score statistics: min=-0.2057, max=0.1300, mean=0.0521, median=0.0701, std=0.0540
+
+Most common anomaly reasons:
+anomaly_reason
+unusual multivariate behavior across account and post metrics    4071
+high misinformation probability                                  1722
+abnormal engagement spike                                        1094
+high toxicity                                                     742
+unusually large audience                                          429
+high misinformation probability; high toxicity                    182
+abnormal engagement spike; high misinformation probability        126
+high misinformation probability; unusually large audience         117
+abnormal engagement spike; high toxicity                          115
+abnormal engagement spike; unusually large audience                93
+
+Records are flagged by IsolationForest when their combined account, engagement, credibility, toxicity, and misinformation profile is rare compared with the rest of the dataset.
+
+Anomaly Detection Performance Evaluation
+======================================
+Supervised anomaly metrics are skipped unless labeled anomalies are provided in the dataset.
+No labeled anomaly column was found, so supervised metrics could not be computed.
+The unsupervised summary above captures the anomaly count, scores, and reasons instead.

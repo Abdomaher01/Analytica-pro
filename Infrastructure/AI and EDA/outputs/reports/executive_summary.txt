@@ -17,7 +17,7 @@ The segmentation model identified 3 K-Means user/post groups. These groups separ
 IsolationForest flagged 8,781 unusual records. These records show rare combinations of audience size, engagement, toxicity, credibility, and misinformation risk, making them strong candidates for human review.
 
 6. What trends are expected next month?
-The forecast suggests an downward misinformation trend, an stable credibility trend, and an upward post-volume trend over the next 30 days.
+The forecast suggests an downward misinformation trend, an upward credibility trend, and an upward post-volume trend over the next 30 days.
 
 7. What are the most important strategic recommendations?
 - Build monitoring dashboards around the strongest misinformation and credibility drivers.

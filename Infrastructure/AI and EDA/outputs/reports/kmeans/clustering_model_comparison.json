@@ -1,0 +1,38 @@
+[
+  {
+    "model_name": "K-Means",
+    "cluster_count": 3,
+    "silhouette_score": 0.312666654586792,
+    "davies_bouldin_index": 1.740275624769162,
+    "calinski_harabasz_score": 1517.3567303097702,
+    "silhouette_sampled": false,
+    "silhouette_sample_size": 10000,
+    "inertia": 77882.09375,
+    "skipped_reason": NaN,
+    "is_best": true
+  },
+  {
+    "model_name": "Agglomerative Clustering",
+    "cluster_count": 3,
+    "silhouette_score": NaN,
+    "davies_bouldin_index": NaN,
+    "calinski_harabasz_score": NaN,
+    "silhouette_sampled": false,
+    "silhouette_sample_size": 0,
+    "inertia": NaN,
+    "skipped_reason": "dataset_too_large",
+    "is_best": false
+  },
+  {
+    "model_name": "DBSCAN",
+    "cluster_count": 1,
+    "silhouette_score": NaN,
+    "davies_bouldin_index": NaN,
+    "calinski_harabasz_score": NaN,
+    "silhouette_sampled": false,
+    "silhouette_sample_size": 0,
+    "inertia": NaN,
+    "skipped_reason": NaN,
+    "is_best": false
+  }
+]

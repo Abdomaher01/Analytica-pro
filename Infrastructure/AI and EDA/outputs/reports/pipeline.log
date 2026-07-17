@@ -1,13 +1,75 @@
-2026-07-11 14:48:17,668 | INFO | Advanced analytics pipeline started
-2026-07-11 14:48:18,561 | INFO | Training hardware: device=cuda cpu_cores=16 cpu_threads=16 gpu=NVIDIA GeForce RTX 2050
-2026-07-11 14:48:18,563 | INFO | Current memory footprint: 412.00 MB
-2026-07-11 14:48:18,567 | INFO | GPU memory: 275 MB used / 4096 MB total
-2026-07-11 14:48:18,761 | INFO | Loaded ../Medalian/Silver.csv with shape (50000, 33)
-2026-07-11 14:48:18,861 | INFO | XGBoost training device: cuda (requested=cuda)
-2026-07-11 14:48:18,863 | INFO | Starting XGBoost insight engine
-2026-07-11 14:48:18,864 | INFO | Training XGBoost model for misinformation_probability
-2026-07-11 14:50:17,371 | INFO | Model tuning completed in 123.23 seconds on cuda
-2026-07-11 14:50:38,237 | INFO | Model misinformation_probability trained in 145.22 seconds on cuda
-2026-07-11 14:50:38,238 | INFO | Model misinformation_probability resource usage: cpu_threads=16 peak_rss_mb=557.93 gpu=NVIDIA GeForce RTX 2050
-2026-07-11 14:50:38,239 | INFO | Model misinformation_probability GPU memory: 277 MB used / 4096 MB total
-2026-07-11 14:50:38,240 | INFO | Training XGBoost model for credibility_score
+2026-07-17 16:02:25,952 | INFO | Advanced analytics pipeline started (resume=True, reuse_models=True)
+2026-07-17 16:02:26,096 | INFO | Stage started: environment_setup
+2026-07-17 16:02:26,152 | INFO | Training hardware: device=cuda cpu_cores=16 cpu_threads=16 gpu=NVIDIA GeForce RTX 2050
+2026-07-17 16:02:26,153 | INFO | Current memory footprint: 558.26 MB
+2026-07-17 16:02:26,154 | INFO | GPU memory: 81 MB used / 4096 MB total
+2026-07-17 16:02:26,154 | INFO | Stage completed: environment_setup in 0.06 seconds
+2026-07-17 16:02:26,155 | INFO | Stage started: data_loading
+2026-07-17 16:02:26,232 | INFO | Loaded ../Medalian/Silver.csv with shape (50000, 33)
+2026-07-17 16:02:26,270 | INFO | Stage completed: data_loading in 0.11 seconds
+2026-07-17 16:02:26,270 | INFO | Checkpoint saved after stage: data_loading
+2026-07-17 16:02:26,271 | INFO | Stage started: feature_engineering
+2026-07-17 16:02:26,286 | INFO | Stage completed: feature_engineering in 0.01 seconds
+2026-07-17 16:02:26,287 | INFO | Checkpoint saved after stage: feature_engineering
+2026-07-17 16:02:26,288 | INFO | Stage started: model_training
+2026-07-17 16:02:26,288 | INFO | XGBoost training device: cuda (requested=cuda)
+2026-07-17 16:02:26,289 | INFO | Starting XGBoost insight engine
+2026-07-17 16:02:26,289 | INFO | Parameters: device=cuda, random_state=42, reuse_models=True, data_mtime=1783706648.7360027
+2026-07-17 16:02:26,290 | INFO | Training XGBoost model for target: misinformation_probability
+2026-07-17 16:02:26,290 | INFO | Training XGBoost model for misinformation_probability
+2026-07-17 16:02:47,848 | INFO | Model tuning completed in 20.73 seconds on cuda
+2026-07-17 16:02:55,953 | INFO | Model misinformation_probability trained in 28.80 seconds on cuda
+2026-07-17 16:02:55,953 | INFO | Model misinformation_probability resource usage: cpu_threads=16 peak_rss_mb=625.11 gpu=NVIDIA GeForce RTX 2050
+2026-07-17 16:02:55,954 | INFO | Model misinformation_probability GPU memory: 83 MB used / 4096 MB total
+2026-07-17 16:02:55,955 | INFO | Checkpoint saved after stage: xgboost_misinformation_probability
+2026-07-17 16:02:55,955 | INFO | Successfully trained XGBoost model for misinformation_probability
+2026-07-17 16:02:55,956 | INFO | Training XGBoost model for target: credibility_score
+2026-07-17 16:02:55,957 | INFO | Training XGBoost model for credibility_score
+2026-07-17 16:03:15,680 | INFO | Model tuning completed in 18.35 seconds on cuda
+2026-07-17 16:03:24,452 | INFO | Model credibility_score trained in 27.07 seconds on cuda
+2026-07-17 16:03:24,452 | INFO | Model credibility_score resource usage: cpu_threads=16 peak_rss_mb=639.98 gpu=NVIDIA GeForce RTX 2050
+2026-07-17 16:03:24,453 | INFO | Model credibility_score GPU memory: 83 MB used / 4096 MB total
+2026-07-17 16:03:24,454 | INFO | Checkpoint saved after stage: xgboost_credibility_score
+2026-07-17 16:03:24,454 | INFO | Successfully trained XGBoost model for credibility_score
+2026-07-17 16:03:24,455 | INFO | Writing XGBoost reports for 2 targets: ['misinformation_probability', 'credibility_score']
+2026-07-17 16:03:24,506 | INFO | Stage completed: model_training in 56.03 seconds
+2026-07-17 16:03:24,507 | INFO | Checkpoint saved after stage: model_training
+2026-07-17 16:03:24,508 | INFO | Stage started: shap_explainability
+2026-07-17 16:03:24,508 | INFO | Starting SHAP explainability
+2026-07-17 16:03:24,508 | WARNING | SHAP is not available in this environment: Numba needs NumPy 2.4 or less. Got NumPy 2.5.
+2026-07-17 16:03:24,509 | INFO | Checkpoint saved after stage: shap
+2026-07-17 16:03:24,510 | INFO | Stage completed: shap_explainability in 0.00 seconds
+2026-07-17 16:03:24,510 | INFO | Stage started: preprocessing
+2026-07-17 16:03:24,536 | INFO | Stage completed: preprocessing in 0.03 seconds
+2026-07-17 16:03:24,537 | INFO | Checkpoint saved after stage: preprocessing
+2026-07-17 16:03:24,538 | INFO | Stage started: clustering_training
+2026-07-17 16:03:24,538 | INFO | Starting user and post segmentation
+2026-07-17 16:03:24,541 | INFO | Clustering subsample used: n=50000 sample=10000 max=10000
+2026-07-17 16:04:36,873 | INFO | Clustering subsample used: n=50000 sample=10000 max=10000
+2026-07-17 16:04:39,027 | INFO | Skipping Agglomerative Clustering evaluation (n=50000, max=5000).
+2026-07-17 16:04:39,601 | INFO | Checkpoint saved after stage: clustering
+2026-07-17 16:04:39,602 | INFO | Stage completed: clustering_training in 73.10 seconds
+2026-07-17 16:04:39,603 | INFO | Stage started: anomaly_detection
+2026-07-17 16:04:39,603 | INFO | Starting anomaly detection
+2026-07-17 16:04:44,879 | INFO | Checkpoint saved after stage: anomaly_detection
+2026-07-17 16:04:44,880 | INFO | Stage completed: anomaly_detection in 4.29 seconds
+2026-07-17 16:04:44,880 | INFO | Stage started: forecasting
+2026-07-17 16:04:44,881 | INFO | Starting time-series forecasting
+2026-07-17 16:04:44,942 | INFO | Chain [1] start processing
+2026-07-17 16:04:45,028 | INFO | Chain [1] done processing
+2026-07-17 16:04:45,419 | INFO | Chain [1] start processing
+2026-07-17 16:04:45,513 | INFO | Chain [1] done processing
+2026-07-17 16:04:45,866 | INFO | Chain [1] start processing
+2026-07-17 16:04:45,975 | INFO | Chain [1] done processing
+2026-07-17 16:04:46,319 | INFO | Chain [1] start processing
+2026-07-17 16:04:46,376 | INFO | Chain [1] done processing
+2026-07-17 16:04:46,687 | INFO | Checkpoint saved after stage: forecasting
+2026-07-17 16:04:46,687 | INFO | Stage completed: forecasting in 1.81 seconds
+2026-07-17 16:04:46,688 | INFO | Stage started: executive_summary
+2026-07-17 16:04:46,690 | INFO | Checkpoint saved after stage: executive_summary
+2026-07-17 16:04:46,691 | INFO | Stage completed: executive_summary in 0.00 seconds
+2026-07-17 16:04:46,691 | INFO | Stage started: insights_reporting
+2026-07-17 16:04:46,707 | INFO | Checkpoint saved after stage: insights_reporting
+2026-07-17 16:04:46,708 | INFO | Stage completed: insights_reporting in 0.02 seconds
+2026-07-17 16:04:46,709 | INFO | Pipeline completed. Outputs saved to outputs
+2026-07-17 16:04:46,709 | INFO | Stage timings: {'environment_setup': 0.05818067699965468, 'data_loading': 0.11462989999927231, 'feature_engineering': 0.014973907999774383, 'model_training': 56.03454419700029, 'shap_explainability': 0.002303350000147475, 'preprocessing': 0.025830752999354445, 'clustering_training': 73.09610812000028, 'anomaly_detection': 4.291606671000409, 'forecasting': 1.8070535540000492, 'executive_summary': 0.002632044000165479, 'insights_reporting': 0.01677597399975639}

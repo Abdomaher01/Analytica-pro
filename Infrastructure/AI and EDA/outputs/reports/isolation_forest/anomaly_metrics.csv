@@ -1,0 +1,2 @@
+anomaly_count,total_records,anomaly_percentage,contamination_setting,anomaly_ratio,score_min,score_max,score_mean,score_median,score_std,score_p25,score_p75
+8781,50000,17.56,,0.1756,-0.20569189710858327,0.13000808713861634,0.052063997061564116,0.07013020008934945,0.05401502746570922,0.025696361814805835,0.09169470303180245

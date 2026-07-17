@@ -1,0 +1,24 @@
+Training Summary
+================
+resolved_device=cuda
+cpu_cores=16
+cpu_threads=16
+gpu=NVIDIA GeForce RTX 2050
+peak_rss_mb=639.98
+
+gpu_memory_used_mb=83
+gpu_memory_total_mb=4096
+
+Misinformation Probability
+  device=cuda
+  training_seconds=28.80
+  rmse=0.004004
+  r2=0.999588
+
+Credibility Score
+  device=cuda
+  training_seconds=27.07
+  rmse=0.003966
+  r2=0.999495
+
+total_xgboost_training_seconds=55.87

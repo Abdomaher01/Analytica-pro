@@ -1,0 +1,23 @@
+{
+  "completed_stages": [
+    "anomaly_detection",
+    "clustering",
+    "data_loading",
+    "executive_summary",
+    "feature_engineering",
+    "forecasting",
+    "insights_reporting",
+    "model_training",
+    "preprocessing",
+    "shap",
+    "xgboost_credibility_score",
+    "xgboost_misinformation_probability"
+  ],
+  "artifacts": {
+    "xgboost_misinformation_probability": "outputs/models/xgboost/xgboost_misinformation_probability.pkl",
+    "xgboost_credibility_score": "outputs/models/xgboost/xgboost_credibility_score.pkl",
+    "clustered_data": "outputs/datasets/clustering/clustered_data.csv",
+    "anomalies": "outputs/datasets/anomaly_detection/anomalies.csv"
+  },
+  "updated_at": "2026-07-17 16:04:46"
+}

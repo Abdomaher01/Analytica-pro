@@ -1,0 +1,120 @@
+XGBoost Insight Engine
+========================
+
+Misinformation Probability
+--------------------------
+MAE: 0.0027
+RMSE: 0.0040
+R2: 0.9996
+Best cross-validated RMSE: 0.0047
+
+Top 20 important features:
+                          feature  importance
+           risk_minus_credibility    0.861503
+                credibility_score    0.133660
+                uncertainty_index    0.002502
+                       month_June    0.000120
+                     month_August    0.000088
+              emotion_Frustration    0.000082
+                 source_type_User    0.000081
+            topic_User complaints    0.000080
+          crisis_phase_Escalation    0.000072
+             stance_label_Neutral    0.000072
+                       day_Sunday    0.000068
+                    day_Wednesday    0.000068
+                    audience_size    0.000067
+toxicity_subjectivity_interaction    0.000062
+                 total_engagement    0.000059
+              engagement_velocity    0.000059
+           claim_type_Observation    0.000057
+             stance_label_Support    0.000054
+                   reach_estimate    0.000052
+                    cascade_depth    0.000052
+
+Strongest positive drivers:
+                 feature  directional_effect
+  risk_minus_credibility            0.337166
+       uncertainty_index            0.000500
+          follower_count            0.000005
+           audience_size            0.000003
+follower_following_ratio            0.000002
+               like_rate            0.000002
+                   topic            0.000002
+                   likes            0.000002
+                comments            0.000002
+        account_age_days            0.000001
+
+Strongest negative drivers:
+                          feature  directional_effect
+                credibility_score       -1.476376e-01
+                  sentiment_score       -6.198045e-06
+              engagement_velocity       -4.757196e-06
+toxicity_subjectivity_interaction       -4.387926e-06
+                 total_engagement       -4.271045e-06
+               subjectivity_score       -2.910383e-06
+              share_comment_ratio       -1.666415e-06
+                  following_count       -1.307763e-06
+                       reach_rate       -8.095056e-07
+             impressions_estimate       -6.973743e-07
+
+Recommendation:
+Escalate review queues when risk_minus_credibility rises, and use patterns like credibility_score as lower-risk benchmarks.
+
+Credibility Score
+-----------------
+MAE: 0.0027
+RMSE: 0.0040
+R2: 0.9995
+Best cross-validated RMSE: 0.0048
+
+Top 20 important features:
+                   feature  importance
+    risk_minus_credibility    0.851717
+misinformation_probability    0.146017
+    stance_label_Criticize    0.000097
+  topic_Service disruption    0.000087
+            follower_count    0.000087
+              month_August    0.000087
+      stance_label_Support    0.000078
+     topic_User complaints    0.000073
+            reach_estimate    0.000065
+      impressions_estimate    0.000064
+             audience_size    0.000057
+        subjectivity_score    0.000052
+          total_engagement    0.000052
+                day_Friday    0.000051
+          source_type_User    0.000051
+              day_Thursday    0.000049
+           following_count    0.000048
+                share_rate    0.000046
+   crisis_phase_Escalation    0.000046
+                 like_rate    0.000045
+
+Strongest positive drivers:
+                          feature  directional_effect
+                  sentiment_score        6.284658e-06
+                  following_count        4.535727e-06
+               subjectivity_score        3.739167e-06
+toxicity_subjectivity_interaction        2.798252e-06
+                 total_engagement        2.781209e-06
+              share_comment_ratio        1.112558e-06
+                            topic        1.096446e-06
+                           shares        9.120442e-07
+                     stance_label        3.250316e-07
+                              day        2.802350e-07
+
+Strongest negative drivers:
+                   feature  directional_effect
+    risk_minus_credibility       -3.091173e-01
+misinformation_probability       -1.414595e-01
+         uncertainty_index       -7.918663e-06
+                share_rate       -3.790576e-06
+                  comments       -3.103539e-06
+                 like_rate       -2.409983e-06
+                reach_rate       -2.377667e-06
+      impressions_estimate       -1.677312e-06
+              comment_rate       -1.455564e-06
+       engagement_velocity       -9.912997e-07
+
+Recommendation:
+Amplify credible content patterns connected to sentiment_score, and audit content conditions where risk_minus_credibility suppresses credibility.

@@ -1,0 +1,4 @@
+model_name,cluster_count,silhouette_score,davies_bouldin_index,calinski_harabasz_score,silhouette_sampled,silhouette_sample_size,inertia,skipped_reason,is_best
+K-Means,3,0.312666654586792,1.740275624769162,1517.3567303097702,False,10000,77882.09375,,True
+Agglomerative Clustering,3,,,,False,0,,dataset_too_large,False
+DBSCAN,1,,,,False,0,,,False

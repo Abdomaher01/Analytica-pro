@@ -10,13 +10,15 @@ import logging
 import math
 import os
 import pickle
+import shutil
 import subprocess
 import sys
 import time
 import warnings
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     import resource
@@ -114,6 +116,17 @@ CLUSTER_FEATURES = [
     "misinformation_probability",
 ]
 
+# Performance tuning: silhouette is O(n^2); Agglomerative is O(n^2) memory/time.
+SILHOUETTE_SAMPLE_THRESHOLD = 10_000
+SILHOUETTE_SAMPLE_SIZE = 5_000
+AGGLOMERATIVE_MAX_SAMPLES = 5_000
+CLUSTERING_EVAL_MAX_SAMPLES = 10_000
+MAX_SKLEARN_JOBS = 4
+MAX_TUNING_JOBS = 4
+KMEANS_N_INIT_LARGE = 10
+KMEANS_N_INIT_SMALL = 20
+CHECKPOINT_FILENAME = "pipeline_checkpoint.json"
+
 
 @dataclass
 class OutputPaths:
@@ -124,6 +137,8 @@ class OutputPaths:
     plots: Path
     reports: Path
     datasets: Path
+    forecast_reports: Path
+    assets_images: Path
 
 
 @dataclass
@@ -139,13 +154,65 @@ class ModelResult:
     y_test: pd.Series
     predictions: np.ndarray
     training_seconds: float = 0.0
-    device_used: str = "cpu"
+    device_used: str = "cuda"
+
+
+@dataclass
+class ScaledMatrixCache:
+    """Reuse imputed/scaled matrices across clustering and anomaly detection."""
+
+    numeric_data: pd.DataFrame
+    scaled: np.ndarray
+
+
+@dataclass
+class StageTimer:
+    """Track and log elapsed time for every pipeline stage."""
+
+    timings: dict[str, float] = field(default_factory=dict)
+    _stack: list[tuple[str, float]] = field(default_factory=list)
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        logging.info("Stage started: %s", name)
+        self._stack.append((name, started))
+        try:
+            yield
+        finally:
+            stage_name, stage_start = self._stack.pop()
+            elapsed = time.perf_counter() - stage_start
+            self.timings[stage_name] = self.timings.get(stage_name, 0.0) + elapsed
+            logging.info("Stage completed: %s in %.2f seconds", stage_name, elapsed)
+
+    def write_report(self, path: Path) -> None:
+        lines = ["Pipeline Stage Timings", "=" * 22, ""]
+        total = 0.0
+        for name, elapsed in self.timings.items():
+            lines.append(f"{name}: {elapsed:.2f}s")
+            total += elapsed
+        lines.extend(["", f"total_logged_seconds: {total:.2f}"])
+        save_text(path, "\n".join(lines))
 
 
 def get_cpu_thread_count() -> int:
-    """Return the number of CPU threads to use for parallel sklearn jobs."""
+    """Return the number of CPU threads available on the host."""
 
     return max(1, os.cpu_count() or 1)
+
+
+def get_sklearn_job_count() -> int:
+    """Cap sklearn parallelism to avoid nested thread oversubscription."""
+
+    return min(MAX_SKLEARN_JOBS, get_cpu_thread_count())
+
+
+def get_tuning_job_count(device: str) -> int:
+    """Limit hyperparameter search workers; GPU fits must stay serial."""
+
+    if device == "cuda":
+        return 1
+    return min(MAX_TUNING_JOBS, get_cpu_thread_count())
 
 
 def get_pipeline_memory() -> Memory:
@@ -200,8 +267,8 @@ def get_training_hardware_profile() -> dict[str, Any]:
     }
 
 
-def resolve_xgboost_device(requested: str = "auto") -> str:
-    """Detect CUDA availability and fall back to CPU when needed."""
+def resolve_xgboost_device(requested: str = "cuda") -> str:
+    """Prefer CUDA when available and fall back to CPU when needed."""
 
     if requested == "cpu":
         return "cpu"
@@ -296,7 +363,7 @@ def log_model_training_stats(target: str, device: str, elapsed_seconds: float) -
 
 
 # Status Logging in terminal
-def configure_logging(report_dir: Path) -> None:
+def configure_logging(report_dir: Path, append: bool = False) -> None:
     """Log progress to the console and to outputs/reports/pipeline.log."""
 
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -306,8 +373,9 @@ def configure_logging(report_dir: Path) -> None:
         format="%(asctime)s | %(levelname)s | %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler(log_path, mode="w", encoding="utf-8"),
+            logging.FileHandler(log_path, mode="a" if append else "w", encoding="utf-8"),
         ],
+        force=True,
     )
 
 # Create output folder structure
@@ -321,23 +389,79 @@ def create_output_paths(base_dir: Path) -> OutputPaths:
         plots=root / "plots",
         reports=root / "reports",
         datasets=root / "datasets",
+        forecast_reports=root / "reports" / "forecasting",
+        assets_images=root / "plots" / "assets",
     )
     for path in [paths.root, paths.models, paths.plots, paths.reports, paths.datasets]:
         path.mkdir(parents=True, exist_ok=True)
+
+    for model_name in ["xgboost", "random_forest", "prophet", "kmeans", "isolation_forest"]:
+        for category_dir in [paths.models, paths.plots, paths.reports]:
+            (category_dir / model_name).mkdir(parents=True, exist_ok=True)
+
+    for category in ["processed", "forecasting", "clustering", "anomaly_detection", "feature_engineering"]:
+        (paths.datasets / category).mkdir(parents=True, exist_ok=True)
+
     return paths
+
+
+def ensure_output_dir(path: Path) -> Path:
+    """Create a directory if needed and return it."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_model_output_dir(paths: OutputPaths, model_name: str, artifact_kind: str) -> Path:
+    """Return the model-specific output directory for a given artifact kind."""
+
+    if artifact_kind == "models":
+        return ensure_output_dir(paths.models / model_name)
+    if artifact_kind == "plots":
+        return ensure_output_dir(paths.plots / model_name)
+    if artifact_kind == "reports":
+        return ensure_output_dir(paths.reports / model_name)
+    raise ValueError(f"Unsupported artifact kind: {artifact_kind}")
+
+
+def get_dataset_output_dir(paths: OutputPaths, category: str) -> Path:
+    """Return the dataset directory for a given data category."""
+
+    return ensure_output_dir(paths.datasets / category)
+
 
 # Save reports
 def save_text(path: Path, content: str) -> None:
     """Write UTF-8 text reports."""
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content.strip() + "\n", encoding="utf-8")
 
 
 def save_pickle(path: Path, obj: Any) -> None:
     """Persist Python objects without adding non-requested dependencies."""
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as file:
         pickle.dump(obj, file)
+
+
+def build_markdown_table(dataframe: pd.DataFrame | None, title: str) -> str:
+    """Render a simple markdown table from a pandas dataframe."""
+
+    if dataframe is None or dataframe.empty:
+        return f"### {title}\n\nNo data available."
+
+    display_frame = dataframe.copy()
+    for column in display_frame.columns:
+        if pd.api.types.is_float_dtype(display_frame[column]):
+            display_frame[column] = display_frame[column].round(4)
+        display_frame[column] = display_frame[column].fillna("n/a").astype(str)
+
+    header = "| " + " | ".join(display_frame.columns) + " |"
+    separator = "| " + " | ".join(["---"] * len(display_frame.columns)) + " |"
+    body = "\n".join("| " + " | ".join(row) + " |" for row in display_frame.itertuples(index=False, name=None))
+    return f"### {title}\n\n{header}\n{separator}\n{body}"
 
 
 def safe_filename(name: str) -> str:
@@ -408,7 +532,7 @@ def build_analysis_date(data: pd.DataFrame) -> pd.Series:
     month_lookup = {
         month: index for index, month in enumerate(pd.date_range("2025-01-01", periods=12, freq="MS").month_name(), start=1)
     }
-    month_number = data["month"].map(month_lookup).fillna(1).astype(int)
+    month_number = data["month"].map(month_lookup).astype('float64').fillna(1).astype(int)
     year = pd.to_numeric(data["year"], errors="coerce").fillna(pd.Timestamp.today().year).astype(int)
 
     # The Silver dataset stores weekday names, not day-of-month. Use a stable
@@ -477,7 +601,7 @@ def make_preprocessor(features: pd.DataFrame) -> ColumnTransformer:
 def get_xgboost_gpu_params(device: str) -> dict[str, Any]:
     """Return XGBoost parameters for CPU or CUDA training."""
 
-    cpu_threads = get_cpu_thread_count()
+    cpu_threads = get_sklearn_job_count()
     if device == "cpu":
         return {
             "tree_method": "hist",
@@ -556,25 +680,23 @@ def tune_xgboost_model(
         # RandomizedSearch explores the same space more efficiently than a full
         # grid while keeping model quality high.
         param_distributions = {
-            "model__n_estimators": [200, 300, 400],
-            "model__max_depth": [4, 5, 6, 7],
-            "model__learning_rate": [0.03, 0.05, 0.08],
+            "model__n_estimators": [120, 180, 240],
+            "model__max_depth": [4, 5, 6],
+            "model__learning_rate": [0.03, 0.05, 0.07],
             "model__subsample": [0.85, 0.9, 1.0],
             "model__colsample_bytree": [0.85, 0.9, 1.0],
-            "model__reg_lambda": [0.5, 1.0, 1.5],
-            "model__reg_alpha": [0.0, 0.1, 0.5],
+            "model__reg_lambda": [0.5, 1.0],
+            "model__reg_alpha": [0.0, 0.1],
         }
-        folds = KFold(n_splits=3, shuffle=True, random_state=random_state)
-        cpu_threads = get_cpu_thread_count()
+        folds = KFold(n_splits=2, shuffle=True, random_state=random_state)
 
         return RandomizedSearchCV(
             estimator=model,
             param_distributions=param_distributions,
-            n_iter=16,
+            n_iter=8,
             scoring="neg_root_mean_squared_error",
             cv=folds,
-            # GPU training should not launch many parallel fits against one laptop GPU.
-            n_jobs=1 if estimator_device == "cuda" else cpu_threads,
+            n_jobs=get_tuning_job_count(estimator_device),
             random_state=random_state,
             verbose=0,
         )
@@ -653,7 +775,7 @@ def estimate_signed_effects(
             n_repeats=5,
             random_state=42,
             scoring="neg_root_mean_squared_error",
-            n_jobs=1 if device == "cuda" else get_cpu_thread_count(),
+            n_jobs=1 if device == "cuda" else get_sklearn_job_count(),
         )
     except Exception as exc:
         logging.warning("Permutation importance failed (%s). Retrying serially.", exc)
@@ -702,7 +824,7 @@ def plot_feature_importance(importance: pd.DataFrame, target: str, paths: Output
     plt.xlabel("XGBoost importance")
     plt.ylabel("")
     plt.tight_layout()
-    plt.savefig(paths.plots / f"xgboost_feature_importance_{target}.png", dpi=200)
+    plt.savefig(get_model_output_dir(paths, "xgboost", "plots") / f"xgboost_feature_importance_{target}.png", dpi=200)
     plt.close()
 
 
@@ -723,8 +845,256 @@ def plot_prediction_quality(
     plt.xlabel("Actual")
     plt.ylabel("Predicted")
     plt.tight_layout()
-    plt.savefig(paths.plots / f"xgboost_actual_vs_predicted_{target}.png", dpi=200)
+    plt.savefig(get_model_output_dir(paths, "xgboost", "plots") / f"xgboost_actual_vs_predicted_{target}.png", dpi=200)
     plt.close()
+
+
+def load_saved_xgboost_result(
+    target: str,
+    paths: OutputPaths,
+    data: pd.DataFrame,
+    random_state: int,
+) -> ModelResult | None:
+    """Load a previously trained XGBoost model and its evaluation artifacts."""
+
+    model_token = safe_filename(target)
+    model_dir = get_model_output_dir(paths, "xgboost", "models")
+    report_dir = get_model_output_dir(paths, "xgboost", "reports")
+    dataset_dir = get_dataset_output_dir(paths, "processed")
+    model_path = model_dir / f"xgboost_{model_token}.pkl"
+    metrics_path = report_dir / f"xgboost_metrics_{model_token}.csv"
+    importance_path = report_dir / f"xgboost_feature_importance_{model_token}.csv"
+    signed_path = report_dir / f"xgboost_signed_drivers_{model_token}.csv"
+    predictions_path = dataset_dir / f"xgboost_predictions_{model_token}.csv"
+
+    required_paths = [model_path, metrics_path, importance_path, signed_path, predictions_path]
+    if not all(path.exists() for path in required_paths):
+        return None
+
+    best_model = load_pickle(model_path)
+    metrics_raw = pd.read_csv(metrics_path).iloc[0].to_dict()
+    importance = pd.read_csv(importance_path)
+    signed_effects = pd.read_csv(signed_path)
+    prediction_frame = pd.read_csv(predictions_path)
+
+    features, target_values = get_feature_target_split(data, target)
+    _, x_test, _, y_test = train_test_split(
+        features,
+        target_values,
+        test_size=0.2,
+        random_state=random_state,
+    )
+    predictions = prediction_frame["predicted"].to_numpy()
+
+    # Validate and convert metrics with detailed logging
+    logging.debug("Loading metrics for target=%s from %s", target, metrics_path)
+    logging.debug("Raw metrics dict keys: %s", list(metrics_raw.keys()))
+    
+    # Extract device_used and training_seconds before processing other metrics
+    device_used_raw = metrics_raw.get("device_used", "cuda")
+    training_seconds_raw = metrics_raw.get("training_seconds", 0.0)
+    
+    logging.debug("device_used_raw: value=%r, type=%s", device_used_raw, type(device_used_raw).__name__)
+    logging.debug("training_seconds_raw: value=%r, type=%s", training_seconds_raw, type(training_seconds_raw).__name__)
+    
+    # Validate and convert device_used
+    try:
+        if pd.isna(device_used_raw) or device_used_raw is None or device_used_raw == "":
+            logging.warning("device_used is invalid (NaN/None/empty), using default 'cuda'")
+            device_used = "cuda"
+        else:
+            device_used = str(device_used_raw).strip()
+            if not device_used:
+                logging.warning("device_used is empty string after strip, using default 'cuda'")
+                device_used = "cuda"
+    except Exception as exc:
+        logging.warning("Failed to convert device_used: %s, using default 'cuda'", exc)
+        device_used = "cuda"
+    
+    logging.debug("device_used validated: value=%r, type=%s", device_used, type(device_used).__name__)
+    
+    # Validate and convert training_seconds
+    try:
+        if pd.isna(training_seconds_raw) or training_seconds_raw is None:
+            logging.warning("training_seconds is NaN/None, using default 0.0")
+            training_seconds = 0.0
+        else:
+            training_seconds = float(training_seconds_raw)
+            if not math.isfinite(training_seconds):
+                logging.warning("training_seconds is not finite (inf/nan), using default 0.0")
+                training_seconds = 0.0
+    except (ValueError, TypeError) as exc:
+        logging.warning("Failed to convert training_seconds (value=%r, type=%s): %s, using default 0.0", 
+                       training_seconds_raw, type(training_seconds_raw).__name__, exc)
+        training_seconds = 0.0
+    
+    logging.debug("training_seconds validated: value=%r, type=%s", training_seconds, type(training_seconds).__name__)
+    
+    # Convert numeric metrics only, skipping non-numeric fields
+    numeric_metric_keys = {"mae", "rmse", "r2", "best_cv_rmse"}
+    metrics_dict = {}
+    
+    for key, value_raw in metrics_raw.items():
+        # Skip device_used and training_seconds - they're handled separately
+        if key in ("device_used", "training_seconds"):
+            logging.debug("Skipping %s in metrics dict (handled separately)", key)
+            continue
+        
+        # Only convert known numeric metrics
+        if key not in numeric_metric_keys:
+            logging.debug("Skipping unknown metric key: %s (value=%r)", key, value_raw)
+            continue
+        
+        try:
+            if pd.isna(value_raw) or value_raw is None or value_raw == "":
+                logging.warning("Metric %s is invalid (NaN/None/empty), using default 0.0", key)
+                metrics_dict[key] = 0.0
+            else:
+                value_float = float(value_raw)
+                if not math.isfinite(value_float):
+                    logging.warning("Metric %s is not finite (value=%r), using default 0.0", key, value_raw)
+                    metrics_dict[key] = 0.0
+                else:
+                    metrics_dict[key] = value_float
+                    logging.debug("Metric %s converted: value=%r, type=%s -> %f", 
+                                 key, value_raw, type(value_raw).__name__, value_float)
+        except (ValueError, TypeError) as exc:
+            logging.warning("Failed to convert metric %s (value=%r, type=%s): %s, using default 0.0", 
+                           key, value_raw, type(value_raw).__name__, exc)
+            metrics_dict[key] = 0.0
+    
+    logging.debug("Validated metrics dict: %s", metrics_dict)
+    logging.debug("Validated device_used: %s", device_used)
+    logging.debug("Validated training_seconds: %f", training_seconds)
+
+    result = ModelResult(
+        target=target,
+        model=best_model,
+        metrics=metrics_dict,
+        feature_importance=importance,
+        signed_effects=signed_effects,
+        x_test_raw=x_test,
+        y_test=y_test,
+        predictions=predictions,
+        training_seconds=training_seconds,
+        device_used=device_used,
+    )
+    
+    logging.info("Successfully loaded XGBoost result for %s: metrics_keys=%s, device=%s, training_seconds=%.2f",
+                target, list(metrics_dict.keys()), device_used, training_seconds)
+    return result
+
+
+def train_single_xgboost_model(
+    target: str,
+    data: pd.DataFrame,
+    paths: OutputPaths,
+    random_state: int,
+    device: str,
+    data_mtime: float,
+    reuse_models: bool,
+) -> ModelResult:
+    """Train or reuse one XGBoost model with isolated error handling."""
+
+    model_token = safe_filename(target)
+    model_path = get_model_output_dir(paths, "xgboost", "models") / f"xgboost_{model_token}.pkl"
+    if reuse_models and artifact_is_fresh(model_path, data_mtime):
+        cached = load_saved_xgboost_result(target, paths, data, random_state)
+        if cached is not None:
+            logging.info("Reusing saved XGBoost model for %s", target)
+            return cached
+
+    logging.info("Training XGBoost model for %s", target)
+    started = time.perf_counter()
+    features, target_values = get_feature_target_split(data, target)
+    x_train, x_test, y_train, y_test = train_test_split(
+        features,
+        target_values,
+        test_size=0.2,
+        random_state=random_state,
+    )
+
+    search, device_used = tune_xgboost_model(x_train, y_train, random_state, device)
+    best_model = search.best_estimator_
+    predictions = best_model.predict(x_test)
+    
+    logging.debug("Evaluating regression metrics for target=%s", target)
+    metrics = evaluate_regression(y_test, predictions)
+    logging.debug("Regression metrics: %s", metrics)
+    
+    # Validate regression metrics
+    for key, value in metrics.items():
+        if not isinstance(value, (int, float)):
+            logging.error("Metric %s has invalid type: %s (expected numeric), value=%r", 
+                         key, type(value).__name__, value)
+        elif pd.isna(value) or not math.isfinite(value):
+            logging.error("Metric %s has invalid value: %r (NaN or inf)", key, value)
+        else:
+            logging.debug("Metric %s validated: %f", key, value)
+    
+    metrics["best_cv_rmse"] = abs(search.best_score_)
+    logging.debug("Added best_cv_rmse: %f", metrics["best_cv_rmse"])
+
+    importance = get_feature_importance(best_model)
+    signed_effects = estimate_signed_effects(best_model, x_test, y_test, device_used)
+
+    save_pickle(model_path, best_model)
+    
+    # Add timing and device info, with validation
+    training_time = time.perf_counter() - started
+    if not math.isfinite(training_time):
+        logging.warning("training_time is not finite, using 0.0")
+        training_time = 0.0
+    
+    metrics["training_seconds"] = training_time
+    logging.debug("Added training_seconds: %f", metrics["training_seconds"])
+    
+    # Validate device_used
+    if device_used is None or device_used == "":
+        logging.warning("device_used is None or empty, using 'cuda'")
+        device_used = "cuda"
+    device_used = str(device_used).strip()
+    
+    metrics["device_used"] = device_used
+    logging.debug("Added device_used: %s", metrics["device_used"])
+    
+    logging.debug("Final metrics dict before saving: %s", {k: (v if k != 'device_used' else v) for k, v in metrics.items()})
+    
+    report_dir = get_model_output_dir(paths, "xgboost", "reports")
+    dataset_dir = get_dataset_output_dir(paths, "processed")
+    
+    # Save metrics to CSV
+    metrics_csv_path = report_dir / f"xgboost_metrics_{model_token}.csv"
+    logging.debug("Saving metrics to: %s", metrics_csv_path)
+    pd.DataFrame([metrics]).to_csv(metrics_csv_path, index=False)
+    logging.debug("Metrics saved successfully")
+    
+    importance.to_csv(report_dir / f"xgboost_feature_importance_{model_token}.csv", index=False)
+    signed_effects.to_csv(report_dir / f"xgboost_signed_drivers_{model_token}.csv", index=False)
+    pd.DataFrame({"actual": y_test, "predicted": predictions}).to_csv(
+        dataset_dir / f"xgboost_predictions_{model_token}.csv",
+        index=False,
+    )
+
+    plot_feature_importance(importance, target, paths)
+    plot_prediction_quality(y_test, predictions, target, paths)
+
+    elapsed = time.perf_counter() - started
+    result = ModelResult(
+        target=target,
+        model=best_model,
+        metrics=metrics,
+        feature_importance=importance,
+        signed_effects=signed_effects,
+        x_test_raw=x_test,
+        y_test=y_test,
+        predictions=predictions,
+        training_seconds=elapsed,
+        device_used=device_used,
+    )
+    log_model_training_stats(target, device_used, elapsed)
+    save_checkpoint(paths, f"xgboost_{target}", {f"xgboost_{target}": str(model_path)})
+    return result
 
 
 def train_xgboost_models(
@@ -732,64 +1102,76 @@ def train_xgboost_models(
     paths: OutputPaths,
     random_state: int,
     device: str,
+    checkpoint: dict[str, Any] | None = None,
+    data_mtime: float | None = None,
+    reuse_models: bool = True,
 ) -> dict[str, ModelResult]:
     """Train, tune, evaluate, and save one XGBoost model per target."""
 
     logging.info("Starting XGBoost insight engine")
+    logging.info("Parameters: device=%s, random_state=%d, reuse_models=%s, data_mtime=%s",
+                device, random_state, reuse_models, data_mtime)
+    
     results: dict[str, ModelResult] = {}
+    checkpoint = checkpoint or {}
+    data_mtime = data_mtime or 0.0
 
     for target in TARGETS:
-        logging.info("Training XGBoost model for %s", target)
-        started = time.perf_counter()
-        features, target_values = get_feature_target_split(data, target)
-        # A fixed random_state makes the train/test split reproducible for demos,
-        # reports, and grading. The test set is held back until final evaluation.
-        x_train, x_test, y_train, y_test = train_test_split(
-            features,
-            target_values,
-            test_size=0.2,
-            random_state=random_state,
-        )
+        stage_name = f"xgboost_{target}"
+        logging.debug("Processing target: %s, stage_name: %s", target, stage_name)
+        
+        if is_stage_complete(checkpoint, stage_name):
+            try:
+                logging.info("Stage %s is marked complete in checkpoint, attempting to load cached result", stage_name)
+                cached = load_saved_xgboost_result(target, paths, data, random_state)
+                if cached is not None:
+                    logging.info("Successfully resumed from checkpoint for %s", target)
+                    results[target] = cached
+                    continue
+                else:
+                    logging.warning("Stage %s marked complete but could not load saved result, retraining", stage_name)
+            except Exception as exc:
+                logging.exception("Failed to load cached result for %s: %s", target, exc)
+                logging.info("Will retrain model for %s", target)
 
-        search, device_used = tune_xgboost_model(x_train, y_train, random_state, device)
-        best_model = search.best_estimator_
-        predictions = best_model.predict(x_test)
-        metrics = evaluate_regression(y_test, predictions)
-        metrics["best_cv_rmse"] = abs(search.best_score_)
+        try:
+            logging.info("Training XGBoost model for target: %s", target)
+            results[target] = train_single_xgboost_model(
+                target,
+                data,
+                paths,
+                random_state,
+                device,
+                data_mtime,
+                reuse_models=reuse_models,
+            )
+            logging.info("Successfully trained XGBoost model for %s", target)
+        except Exception as exc:
+            logging.exception("XGBoost training failed for %s with exception: %s", target, exc)
+            import traceback
+            full_traceback = traceback.format_exc()
+            logging.error("Full traceback:\n%s", full_traceback)
+            
+            # Attempt to fall back to cached result
+            try:
+                logging.info("Attempting to fall back to last saved model for %s", target)
+                cached = load_saved_xgboost_result(target, paths, data, random_state)
+                if cached is not None:
+                    logging.warning("Falling back to last saved model for %s", target)
+                    results[target] = cached
+                else:
+                    logging.error("No cached model available for %s, skipping target", target)
+            except Exception as fallback_exc:
+                logging.exception("Failed to load fallback model for %s: %s", target, fallback_exc)
+                logging.error("Skipping target %s due to training failure and no cached model", target)
 
-        importance = get_feature_importance(best_model)
-        signed_effects = estimate_signed_effects(best_model, x_test, y_test, device_used)
-
-        model_token = safe_filename(target)
-        save_pickle(paths.models / f"xgboost_{model_token}.pkl", best_model)
-        pd.DataFrame([metrics]).to_csv(paths.reports / f"xgboost_metrics_{model_token}.csv", index=False)
-        importance.to_csv(paths.reports / f"xgboost_feature_importance_{model_token}.csv", index=False)
-        signed_effects.to_csv(paths.reports / f"xgboost_signed_drivers_{model_token}.csv", index=False)
-        pd.DataFrame({"actual": y_test, "predicted": predictions}).to_csv(
-            paths.datasets / f"xgboost_predictions_{model_token}.csv",
-            index=False,
-        )
-
-        plot_feature_importance(importance, target, paths)
-        plot_prediction_quality(y_test, predictions, target, paths)
-
-        elapsed = time.perf_counter() - started
-        results[target] = ModelResult(
-            target=target,
-            model=best_model,
-            metrics=metrics,
-            feature_importance=importance,
-            signed_effects=signed_effects,
-            x_test_raw=x_test,
-            y_test=y_test,
-            predictions=predictions,
-            training_seconds=elapsed,
-            device_used=device_used,
-        )
-        log_model_training_stats(target, device_used, elapsed)
-
-    write_xgboost_report(results, paths)
-    write_training_summary(results, device, paths)
+    if results:
+        logging.info("Writing XGBoost reports for %d targets: %s", len(results), list(results.keys()))
+        write_xgboost_report(results, paths)
+        write_training_summary(results, device, paths)
+    else:
+        logging.warning("No successful XGBoost training results to report")
+    
     return results
 
 
@@ -837,19 +1219,75 @@ def write_training_summary(
 
     total_seconds = 0.0
     for target, result in results.items():
-        total_seconds += result.training_seconds
-        lines.extend(
-            [
+        try:
+            # Validate result object
+            if not isinstance(result, ModelResult):
+                logging.error("Result for %s is not a ModelResult: type=%s", target, type(result).__name__)
+                continue
+            
+            # Validate training_seconds
+            training_seconds = result.training_seconds
+            if not isinstance(training_seconds, (int, float)):
+                logging.error("training_seconds for %s has invalid type: %s, using 0.0", 
+                             target, type(training_seconds).__name__)
+                training_seconds = 0.0
+            elif pd.isna(training_seconds) or not math.isfinite(training_seconds):
+                logging.error("training_seconds for %s is invalid: %r, using 0.0", target, training_seconds)
+                training_seconds = 0.0
+            
+            # Validate device_used
+            device_used = result.device_used
+            if not isinstance(device_used, str):
+                logging.error("device_used for %s has invalid type: %s, converting to string", 
+                             target, type(device_used).__name__)
+                device_used = str(device_used)
+            
+            # Validate metrics
+            if not isinstance(result.metrics, dict):
+                logging.error("metrics for %s is not a dict: type=%s", target, type(result.metrics).__name__)
+                rmse = 0.0
+                r2 = 0.0
+            else:
+                rmse = result.metrics.get('rmse', 0.0)
+                r2 = result.metrics.get('r2', 0.0)
+                
+                # Validate rmse
+                if not isinstance(rmse, (int, float)):
+                    logging.error("rmse for %s has invalid type: %s, using 0.0", target, type(rmse).__name__)
+                    rmse = 0.0
+                elif pd.isna(rmse) or not math.isfinite(rmse):
+                    logging.error("rmse for %s is invalid: %r, using 0.0", target, rmse)
+                    rmse = 0.0
+                
+                # Validate r2
+                if not isinstance(r2, (int, float)):
+                    logging.error("r2 for %s has invalid type: %s, using 0.0", target, type(r2).__name__)
+                    r2 = 0.0
+                elif pd.isna(r2) or not math.isfinite(r2):
+                    logging.error("r2 for %s is invalid: %r, using 0.0", target, r2)
+                    r2 = 0.0
+            
+            total_seconds += training_seconds
+            lines.extend(
+                [
+                    TARGET_LABELS[target],
+                    f"  device={device_used}",
+                    f"  training_seconds={training_seconds:.2f}",
+                    f"  rmse={rmse:.6f}",
+                    f"  r2={r2:.6f}",
+                    "",
+                ]
+            )
+        except Exception as exc:
+            logging.exception("Failed to write summary for %s: %s", target, exc)
+            lines.extend([
                 TARGET_LABELS[target],
-                f"  device={result.device_used}",
-                f"  training_seconds={result.training_seconds:.2f}",
-                f"  rmse={result.metrics['rmse']:.6f}",
-                f"  r2={result.metrics['r2']:.6f}",
+                "  ERROR: Failed to generate summary",
                 "",
-            ]
-        )
+            ])
+    
     lines.append(f"total_xgboost_training_seconds={total_seconds:.2f}")
-    save_text(paths.reports / "training_summary.txt", "\n".join(lines))
+    save_text(get_model_output_dir(paths, "xgboost", "reports") / "training_summary.txt", "\n".join(lines))
 
 
 def write_xgboost_report(results: dict[str, ModelResult], paths: OutputPaths) -> None:
@@ -857,39 +1295,130 @@ def write_xgboost_report(results: dict[str, ModelResult], paths: OutputPaths) ->
 
     sections = ["XGBoost Insight Engine", "=" * 24]
     for target, result in results.items():
-        # Reports convert model artifacts into presentation-ready language:
-        # metrics show quality, feature tables show drivers, and recommendations
-        # connect those drivers to actions.
-        positive = result.signed_effects.head(10)
-        negative = result.signed_effects.tail(10).sort_values("directional_effect")
-        top_positive = positive.iloc[0]["feature"] if not positive.empty else "the strongest positive driver"
-        top_negative = negative.iloc[0]["feature"] if not negative.empty else "the strongest negative driver"
+        try:
+            # Validate result object
+            if not isinstance(result, ModelResult):
+                logging.error("Result for %s is not a ModelResult: type=%s", target, type(result).__name__)
+                sections.extend([
+                    "",
+                    TARGET_LABELS[target],
+                    "ERROR: Invalid result object",
+                    "",
+                ])
+                continue
+            
+            # Reports convert model artifacts into presentation-ready language:
+            # metrics show quality, feature tables show drivers, and recommendations
+            # connect those drivers to actions.
+            
+            # Validate and extract signed_effects
+            if not isinstance(result.signed_effects, pd.DataFrame) or result.signed_effects.empty:
+                logging.warning("signed_effects for %s is invalid or empty", target)
+                positive = pd.DataFrame()
+                negative = pd.DataFrame()
+                top_positive = "the strongest positive driver"
+                top_negative = "the strongest negative driver"
+            else:
+                positive = result.signed_effects.head(10)
+                negative = result.signed_effects.tail(10).sort_values("directional_effect")
+                top_positive = positive.iloc[0]["feature"] if not positive.empty else "the strongest positive driver"
+                top_negative = negative.iloc[0]["feature"] if not negative.empty else "the strongest negative driver"
+            
+            # Validate and extract metrics
+            if not isinstance(result.metrics, dict):
+                logging.error("metrics for %s is not a dict: type=%s", target, type(result.metrics).__name__)
+                mae = "N/A"
+                rmse = "N/A"
+                r2 = "N/A"
+                best_cv_rmse = "N/A"
+            else:
+                mae = result.metrics.get('mae', 0.0)
+                rmse = result.metrics.get('rmse', 0.0)
+                r2 = result.metrics.get('r2', 0.0)
+                best_cv_rmse = result.metrics.get('best_cv_rmse', 0.0)
+                
+                # Validate each metric
+                for metric_name, metric_val in [('mae', mae), ('rmse', rmse), ('r2', r2), ('best_cv_rmse', best_cv_rmse)]:
+                    if not isinstance(metric_val, (int, float)):
+                        logging.error("%s for %s has invalid type: %s, using 0.0", 
+                                     metric_name, target, type(metric_val).__name__)
+                        metric_val = 0.0
+                    elif pd.isna(metric_val) or not math.isfinite(metric_val):
+                        logging.error("%s for %s is invalid: %r, using 0.0", metric_name, target, metric_val)
+                        metric_val = 0.0
+                    
+                    # Update local variables
+                    if metric_name == 'mae':
+                        mae = metric_val
+                    elif metric_name == 'rmse':
+                        rmse = metric_val
+                    elif metric_name == 'r2':
+                        r2 = metric_val
+                    elif metric_name == 'best_cv_rmse':
+                        best_cv_rmse = metric_val
+                
+                # Format metrics for display
+                mae = f"{mae:.4f}"
+                rmse = f"{rmse:.4f}"
+                r2 = f"{r2:.4f}"
+                best_cv_rmse = f"{best_cv_rmse:.4f}"
 
-        sections.extend(
-            [
-                "",
-                TARGET_LABELS[target],
-                "-" * len(TARGET_LABELS[target]),
-                f"MAE: {result.metrics['mae']:.4f}",
-                f"RMSE: {result.metrics['rmse']:.4f}",
-                f"R2: {result.metrics['r2']:.4f}",
-                f"Best cross-validated RMSE: {result.metrics['best_cv_rmse']:.4f}",
-                "",
-                "Top 20 important features:",
-                result.feature_importance.head(20).to_string(index=False),
+            sections.extend(
+                [
+                    "",
+                    TARGET_LABELS[target],
+                    "-" * len(TARGET_LABELS[target]),
+                    f"MAE: {mae}",
+                    f"RMSE: {rmse}",
+                    f"R2: {r2}",
+                    f"Best cross-validated RMSE: {best_cv_rmse}",
+                    "",
+                    "Top 20 important features:",
+                ]
+            )
+            
+            # Validate and add feature importance
+            if isinstance(result.feature_importance, pd.DataFrame) and not result.feature_importance.empty:
+                sections.append(result.feature_importance.head(20).to_string(index=False))
+            else:
+                sections.append("No feature importance data available")
+            
+            sections.extend([
                 "",
                 "Strongest positive drivers:",
-                positive[["feature", "directional_effect"]].to_string(index=False),
+            ])
+            
+            if not positive.empty:
+                sections.append(positive[["feature", "directional_effect"]].to_string(index=False))
+            else:
+                sections.append("No positive drivers available")
+            
+            sections.extend([
                 "",
                 "Strongest negative drivers:",
-                negative[["feature", "directional_effect"]].to_string(index=False),
+            ])
+            
+            if not negative.empty:
+                sections.append(negative[["feature", "directional_effect"]].to_string(index=False))
+            else:
+                sections.append("No negative drivers available")
+            
+            sections.extend([
                 "",
                 "Recommendation:",
                 recommendation_for_target(target, str(top_positive), str(top_negative)),
-            ]
-        )
+            ])
+        except Exception as exc:
+            logging.exception("Failed to generate report for %s: %s", target, exc)
+            sections.extend([
+                "",
+                TARGET_LABELS[target],
+                "ERROR: Failed to generate report",
+                str(exc),
+                "",
+            ])
 
-    save_text(paths.reports / "xgboost_insights.txt", "\n".join(sections))
+    save_text(get_model_output_dir(paths, "xgboost", "reports") / "xgboost_insights.txt", "\n".join(sections))
 
 
 def run_shap_analysis(results: dict[str, ModelResult], paths: OutputPaths) -> dict[str, pd.DataFrame]:
@@ -902,7 +1431,7 @@ def run_shap_analysis(results: dict[str, ModelResult], paths: OutputPaths) -> di
     if shap is None:
         message = f"SHAP is not available in this environment: {SHAP_IMPORT_ERROR}"
         logging.warning(message)
-        save_text(paths.reports / "shap_analysis.txt", message)
+        save_text(get_model_output_dir(paths, "xgboost", "reports") / "shap_analysis.txt", message)
         return shap_tables
 
     for target, result in results.items():
@@ -926,20 +1455,20 @@ def run_shap_analysis(results: dict[str, ModelResult], paths: OutputPaths) -> di
             .reset_index(drop=True)
         )
         shap_tables[target] = shap_table
-        shap_table.to_csv(paths.reports / f"shap_importance_{target}.csv", index=False)
+        shap_table.to_csv(get_model_output_dir(paths, "xgboost", "reports") / f"shap_importance_{target}.csv", index=False)
 
         plt.figure(figsize=(10, 7))
         shap.summary_plot(shap_values, transformed_df, show=False, max_display=20)
         plt.title(f"SHAP Summary: {TARGET_LABELS[target]}")
         plt.tight_layout()
-        plt.savefig(paths.plots / f"shap_summary_{target}.png", dpi=200, bbox_inches="tight")
+        plt.savefig(get_model_output_dir(paths, "xgboost", "plots") / f"shap_summary_{target}.png", dpi=200, bbox_inches="tight")
         plt.close()
 
         plt.figure(figsize=(9, 7))
         shap.summary_plot(shap_values, transformed_df, plot_type="bar", show=False, max_display=20)
         plt.title(f"SHAP Bar Importance: {TARGET_LABELS[target]}")
         plt.tight_layout()
-        plt.savefig(paths.plots / f"shap_bar_{target}.png", dpi=200, bbox_inches="tight")
+        plt.savefig(get_model_output_dir(paths, "xgboost", "plots") / f"shap_bar_{target}.png", dpi=200, bbox_inches="tight")
         plt.close()
 
         dependence_feature = shap_table.iloc[0]["feature"]
@@ -947,7 +1476,7 @@ def run_shap_analysis(results: dict[str, ModelResult], paths: OutputPaths) -> di
         shap.dependence_plot(dependence_feature, shap_values, transformed_df, show=False)
         plt.title(f"SHAP Dependence: {dependence_feature}")
         plt.tight_layout()
-        plt.savefig(paths.plots / f"shap_dependence_{target}.png", dpi=200, bbox_inches="tight")
+        plt.savefig(get_model_output_dir(paths, "xgboost", "plots") / f"shap_dependence_{target}.png", dpi=200, bbox_inches="tight")
         plt.close()
 
         top_features = ", ".join(shap_table.head(5)["feature"].astype(str))
@@ -964,11 +1493,112 @@ def run_shap_analysis(results: dict[str, ModelResult], paths: OutputPaths) -> di
             ]
         )
 
-    save_text(paths.reports / "shap_analysis.txt", "\n".join(sections))
+    save_text(get_model_output_dir(paths, "xgboost", "reports") / "shap_analysis.txt", "\n".join(sections))
     return shap_tables
 
 
-def prepare_scaled_matrix(data: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, np.ndarray]:
+def load_checkpoint(paths: OutputPaths) -> dict[str, Any]:
+    """Load pipeline checkpoint metadata when resuming interrupted training."""
+
+    checkpoint_path = paths.reports / CHECKPOINT_FILENAME
+    if not checkpoint_path.exists():
+        return {"completed_stages": [], "artifacts": {}}
+    with checkpoint_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_checkpoint(paths: OutputPaths, stage: str, artifacts: dict[str, str] | None = None) -> None:
+    """Persist checkpoint after each completed model or pipeline stage."""
+
+    checkpoint_path = paths.reports / CHECKPOINT_FILENAME
+    state = load_checkpoint(paths)
+    completed = set(state.get("completed_stages", []))
+    completed.add(stage)
+    state["completed_stages"] = sorted(completed)
+    state.setdefault("artifacts", {}).update(artifacts or {})
+    state["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    with checkpoint_path.open("w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2)
+    logging.info("Checkpoint saved after stage: %s", stage)
+
+
+def is_stage_complete(checkpoint: dict[str, Any], stage: str) -> bool:
+    """Return True when a pipeline stage was already completed."""
+
+    return stage in checkpoint.get("completed_stages", [])
+
+
+def artifact_is_fresh(artifact_path: Path, reference_mtime: float) -> bool:
+    """Return True when a saved model is newer than the input dataset."""
+
+    return artifact_path.exists() and artifact_path.stat().st_mtime >= reference_mtime
+
+
+def load_pickle(path: Path) -> Any:
+    """Load a pickled artifact."""
+
+    with path.open("rb") as handle:
+        return pickle.load(handle)
+
+
+def compute_silhouette_sampled(
+    matrix: np.ndarray,
+    labels: np.ndarray,
+    random_state: int = 42,
+) -> tuple[float, bool, int]:
+    """Compute silhouette on a sample when the dataset exceeds the threshold."""
+
+    n_samples = matrix.shape[0]
+    unique_labels = np.unique(labels)
+    if len(unique_labels) < 2 or n_samples < 4:
+        return float("nan"), False, n_samples
+
+    if n_samples <= SILHOUETTE_SAMPLE_THRESHOLD:
+        return float(silhouette_score(matrix, labels)), False, n_samples
+
+    sample_size = min(SILHOUETTE_SAMPLE_SIZE, n_samples)
+    rng = np.random.RandomState(random_state)
+    sample_idx = rng.choice(n_samples, size=sample_size, replace=False)
+    score = float(silhouette_score(matrix[sample_idx], labels[sample_idx]))
+    logging.info(
+        "Silhouette sampled: n=%s sample=%s (threshold=%s)",
+        n_samples,
+        sample_size,
+        SILHOUETTE_SAMPLE_THRESHOLD,
+    )
+    return score, True, sample_size
+
+
+def get_evaluation_subsample(
+    matrix: np.ndarray,
+    random_state: int,
+    max_samples: int,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Return a representative subsample for expensive clustering algorithms."""
+
+    n_samples = matrix.shape[0]
+    if n_samples <= max_samples:
+        return matrix, np.arange(n_samples), False
+
+    sample_size = min(max_samples, n_samples)
+    rng = np.random.RandomState(random_state)
+    sample_idx = rng.choice(n_samples, size=sample_size, replace=False)
+    logging.info(
+        "Clustering subsample used: n=%s sample=%s max=%s",
+        n_samples,
+        sample_size,
+        max_samples,
+    )
+    return matrix[sample_idx], sample_idx, True
+
+
+def get_kmeans_n_init(n_samples: int) -> int:
+    """Use fewer K-Means restarts on large datasets."""
+
+    return KMEANS_N_INIT_LARGE if n_samples > SILHOUETTE_SAMPLE_THRESHOLD else KMEANS_N_INIT_SMALL
+
+
+def prepare_scaled_matrix(data: pd.DataFrame, columns: list[str]) -> ScaledMatrixCache:
     """Impute and scale numeric features for clustering and anomaly detection."""
 
     available = [column for column in columns if column in data.columns]
@@ -979,10 +1609,16 @@ def prepare_scaled_matrix(data: pd.DataFrame, columns: list[str]) -> tuple[pd.Da
         index=data.index,
     )
     scaled = StandardScaler().fit_transform(imputed)
-    return imputed, scaled
+    return ScaledMatrixCache(numeric_data=imputed, scaled=scaled.astype(np.float32, copy=False))
 
 
-def _safe_cluster_metrics(matrix: np.ndarray, labels: np.ndarray, model_name: str, cluster_count: int) -> dict[str, float]:
+def _safe_cluster_metrics(
+    matrix: np.ndarray,
+    labels: np.ndarray,
+    model_name: str,
+    cluster_count: int,
+    random_state: int = 42,
+) -> dict[str, float | str | int | bool]:
     """Return cluster evaluation metrics when the label structure is valid."""
 
     unique_labels = np.unique(labels)
@@ -994,14 +1630,19 @@ def _safe_cluster_metrics(matrix: np.ndarray, labels: np.ndarray, model_name: st
             "davies_bouldin_index": np.nan,
             "calinski_harabasz_score": np.nan,
             "inertia": np.nan,
+            "silhouette_sampled": False,
+            "silhouette_sample_size": 0,
         }
 
-    metrics = {
+    silhouette, sampled, sample_size = compute_silhouette_sampled(matrix, labels, random_state)
+    metrics: dict[str, float | str | int | bool] = {
         "model_name": model_name,
         "cluster_count": int(cluster_count),
-        "silhouette_score": float(silhouette_score(matrix, labels)),
+        "silhouette_score": silhouette,
         "davies_bouldin_index": float(davies_bouldin_score(matrix, labels)),
         "calinski_harabasz_score": float(calinski_harabasz_score(matrix, labels)),
+        "silhouette_sampled": sampled,
+        "silhouette_sample_size": int(sample_size),
     }
     if model_name == "K-Means":
         metrics["inertia"] = float(np.nan)
@@ -1014,32 +1655,84 @@ def evaluate_clustering_models(
     paths: OutputPaths | None = None,
     cluster_count: int | None = None,
 ) -> pd.DataFrame:
-    """Evaluate K-Means, Agglomerative Clustering, and DBSCAN with standard metrics."""
+    """Evaluate clustering algorithms with sampled metrics on large datasets."""
 
-    matrix = np.asarray(data, dtype=float)
+    matrix = np.asarray(data, dtype=np.float32)
     if matrix.ndim != 2:
         raise ValueError("Clustering evaluation expects a 2D feature matrix.")
 
     if cluster_count is None:
         cluster_count = min(4, max(2, min(matrix.shape[0] - 1, 6)))
 
-    rows: list[dict[str, float | str | int]] = []
+    eval_matrix, _, subsampled = get_evaluation_subsample(
+        matrix,
+        random_state=random_state,
+        max_samples=CLUSTERING_EVAL_MAX_SAMPLES,
+    )
+    n_init = get_kmeans_n_init(matrix.shape[0])
+    rows: list[dict[str, float | str | int | bool]] = []
 
-    kmeans_model = KMeans(n_clusters=cluster_count, n_init=20, random_state=random_state)
-    kmeans_model.fit(matrix)
-    kmeans_metrics = _safe_cluster_metrics(matrix, kmeans_model.labels_, "K-Means", cluster_count)
+    kmeans_model = KMeans(
+        n_clusters=cluster_count,
+        n_init=n_init,
+        random_state=random_state,
+    )
+    kmeans_model.fit(eval_matrix)
+    kmeans_metrics = _safe_cluster_metrics(
+        eval_matrix,
+        kmeans_model.labels_,
+        "K-Means",
+        cluster_count,
+        random_state=random_state,
+    )
     kmeans_metrics["inertia"] = float(kmeans_model.inertia_)
     rows.append(kmeans_metrics)
 
-    agglomerative_model = AgglomerativeClustering(n_clusters=cluster_count)
-    agglomerative_labels = agglomerative_model.fit_predict(matrix)
-    rows.append(_safe_cluster_metrics(matrix, agglomerative_labels, "Agglomerative Clustering", cluster_count))
+    if matrix.shape[0] <= AGGLOMERATIVE_MAX_SAMPLES and not subsampled:
+        agglomerative_labels = AgglomerativeClustering(n_clusters=cluster_count).fit_predict(eval_matrix)
+        rows.append(
+            _safe_cluster_metrics(
+                eval_matrix,
+                agglomerative_labels,
+                "Agglomerative Clustering",
+                cluster_count,
+                random_state=random_state,
+            )
+        )
+    else:
+        logging.info(
+            "Skipping Agglomerative Clustering evaluation (n=%s, max=%s).",
+            matrix.shape[0],
+            AGGLOMERATIVE_MAX_SAMPLES,
+        )
+        rows.append(
+            {
+                "model_name": "Agglomerative Clustering",
+                "cluster_count": cluster_count,
+                "silhouette_score": np.nan,
+                "davies_bouldin_index": np.nan,
+                "calinski_harabasz_score": np.nan,
+                "inertia": np.nan,
+                "silhouette_sampled": False,
+                "silhouette_sample_size": 0,
+                "skipped_reason": "dataset_too_large",
+            }
+        )
 
     try:
-        dbscan_model = DBSCAN(eps=0.75, min_samples=max(3, int(matrix.shape[0] * 0.02)))
-        dbscan_labels = dbscan_model.fit_predict(matrix)
-        rows.append(_safe_cluster_metrics(matrix, dbscan_labels, "DBSCAN", len(np.unique(dbscan_labels))))
-    except Exception:
+        dbscan_min_samples = min(max(3, int(eval_matrix.shape[0] * 0.02)), 50)
+        dbscan_labels = DBSCAN(eps=0.75, min_samples=dbscan_min_samples).fit_predict(eval_matrix)
+        rows.append(
+            _safe_cluster_metrics(
+                eval_matrix,
+                dbscan_labels,
+                "DBSCAN",
+                len(np.unique(dbscan_labels)),
+                random_state=random_state,
+            )
+        )
+    except Exception as exc:
+        logging.warning("DBSCAN evaluation failed (%s).", exc)
         rows.append(
             {
                 "model_name": "DBSCAN",
@@ -1048,6 +1741,8 @@ def evaluate_clustering_models(
                 "davies_bouldin_index": np.nan,
                 "calinski_harabasz_score": np.nan,
                 "inertia": np.nan,
+                "silhouette_sampled": False,
+                "silhouette_sample_size": 0,
             }
         )
 
@@ -1060,54 +1755,67 @@ def evaluate_clustering_models(
         ascending=[False, True, False],
         na_position="last",
     )
-    if not ranking.empty:
+    if not ranking.empty and ranking["silhouette_score"].notna().any():
         comparison.loc[ranking.index[0], "is_best"] = True
 
     if paths is not None:
-        comparison.to_csv(paths.reports / "clustering_model_comparison.csv", index=False)
-        with (paths.reports / "clustering_model_comparison.json").open("w", encoding="utf-8") as handle:
+        report_dir = get_model_output_dir(paths, "kmeans", "reports")
+        comparison.to_csv(report_dir / "clustering_model_comparison.csv", index=False)
+        with (report_dir / "clustering_model_comparison.json").open("w", encoding="utf-8") as handle:
             json.dump(comparison.to_dict(orient="records"), handle, indent=2)
 
     return comparison
 
 
 def choose_kmeans_clusters(scaled: np.ndarray, paths: OutputPaths, random_state: int) -> tuple[int, pd.DataFrame]:
-    """Select K using silhouette score and save elbow diagnostics."""
+    """Select K using sampled silhouette scores and save elbow diagnostics."""
 
     max_k = min(10, len(scaled) - 1)
     candidate_ks = list(range(2, max_k + 1))
+    selection_matrix, _, _ = get_evaluation_subsample(
+        scaled,
+        random_state=random_state,
+        max_samples=CLUSTERING_EVAL_MAX_SAMPLES,
+    )
+    n_init = get_kmeans_n_init(scaled.shape[0])
     rows = []
 
-    # K-Means needs the number of clusters in advance. We compare candidate K
-    # values with inertia and silhouette score, then choose the strongest
-    # silhouette score because it rewards separated, compact clusters.
     for k in candidate_ks:
-        kmeans = KMeans(n_clusters=k, n_init=20, random_state=random_state)
-        labels = kmeans.fit_predict(scaled)
+        kmeans = KMeans(n_clusters=k, n_init=n_init, random_state=random_state)
+        labels = kmeans.fit_predict(selection_matrix)
+        silhouette, sampled, sample_size = compute_silhouette_sampled(
+            selection_matrix,
+            labels,
+            random_state=random_state,
+        )
         rows.append(
             {
                 "k": k,
                 "inertia": kmeans.inertia_,
-                "silhouette_score": silhouette_score(scaled, labels),
+                "silhouette_score": silhouette,
+                "silhouette_sampled": sampled,
+                "silhouette_sample_size": sample_size,
             }
         )
 
     scores = pd.DataFrame(rows)
     best_k = int(scores.sort_values("silhouette_score", ascending=False).iloc[0]["k"])
-    scores.to_csv(paths.reports / "kmeans_cluster_selection.csv", index=False)
+    report_dir = get_model_output_dir(paths, "kmeans", "reports")
+    plot_dir = get_model_output_dir(paths, "kmeans", "plots")
+    scores.to_csv(report_dir / "kmeans_cluster_selection.csv", index=False)
 
     plt.figure(figsize=(8, 5))
     sns.lineplot(data=scores, x="k", y="inertia", marker="o")
     plt.title("K-Means Elbow Method")
     plt.tight_layout()
-    plt.savefig(paths.plots / "kmeans_elbow.png", dpi=200)
+    plt.savefig(plot_dir / "kmeans_elbow.png", dpi=200)
     plt.close()
 
     plt.figure(figsize=(8, 5))
     sns.lineplot(data=scores, x="k", y="silhouette_score", marker="o")
     plt.title("K-Means Silhouette Scores")
     plt.tight_layout()
-    plt.savefig(paths.plots / "kmeans_silhouette.png", dpi=200)
+    plt.savefig(plot_dir / "kmeans_silhouette.png", dpi=200)
     plt.close()
 
     return best_k, scores
@@ -1135,28 +1843,34 @@ def interpret_cluster(row: pd.Series, global_means: pd.Series) -> str:
     return "Cluster contains accounts/posts with " + ", ".join(traits) + "."
 
 
-def run_clustering(data: pd.DataFrame, paths: OutputPaths, random_state: int) -> pd.DataFrame:
+def run_clustering(
+    data: pd.DataFrame,
+    paths: OutputPaths,
+    random_state: int,
+    scaled_cache: ScaledMatrixCache | None = None,
+) -> pd.DataFrame:
     """Run HDBSCAN when available and K-Means with automatic K selection."""
 
     logging.info("Starting user and post segmentation")
-    numeric_data, scaled = prepare_scaled_matrix(data, CLUSTER_FEATURES)
+    cache = scaled_cache or prepare_scaled_matrix(data, CLUSTER_FEATURES)
+    numeric_data = cache.numeric_data
+    scaled = cache.scaled
     clustered = data.copy()
+    n_init = get_kmeans_n_init(scaled.shape[0])
 
-    # Clustering is unsupervised: there is no target column. The goal is to find
-    # natural behavior groups that can guide moderation or communication strategy.
     best_k, _ = choose_kmeans_clusters(scaled, paths, random_state)
-    kmeans = KMeans(n_clusters=best_k, n_init=30, random_state=random_state)
+    kmeans = KMeans(n_clusters=best_k, n_init=n_init, random_state=random_state)
     clustered["kmeans_cluster"] = kmeans.fit_predict(scaled)
-    save_pickle(paths.models / "kmeans_segmentation.pkl", kmeans)
+    save_pickle(get_model_output_dir(paths, "kmeans", "models") / "kmeans_segmentation.pkl", kmeans)
 
     if HDBSCAN is not None:
         hdbscan_model = HDBSCAN(min_cluster_size=max(10, int(len(data) * 0.02)))
         clustered["hdbscan_cluster"] = hdbscan_model.fit_predict(scaled)
-        save_pickle(paths.models / "hdbscan_segmentation.pkl", hdbscan_model)
+        save_pickle(get_model_output_dir(paths, "kmeans", "models") / "hdbscan_segmentation.pkl", hdbscan_model)
     else:
         clustered["hdbscan_cluster"] = np.nan
 
-    clustered.to_csv(paths.datasets / "clustered_data.csv", index=False)
+    clustered.to_csv(get_dataset_output_dir(paths, "clustering") / "clustered_data.csv", index=False)
 
     summary = (
         clustered.groupby("kmeans_cluster")
@@ -1169,7 +1883,7 @@ def run_clustering(data: pd.DataFrame, paths: OutputPaths, random_state: int) ->
         )
         .reset_index()
     )
-    summary.to_csv(paths.reports / "clustering_summary.csv", index=False)
+    summary.to_csv(get_model_output_dir(paths, "kmeans", "reports") / "clustering_summary.csv", index=False)
 
     plt.figure(figsize=(9, 7))
     sns.scatterplot(
@@ -1181,7 +1895,7 @@ def run_clustering(data: pd.DataFrame, paths: OutputPaths, random_state: int) ->
     )
     plt.title("K-Means Segments: Engagement vs Misinformation")
     plt.tight_layout()
-    plt.savefig(paths.plots / "clusters_engagement_misinformation.png", dpi=200)
+    plt.savefig(get_model_output_dir(paths, "kmeans", "plots") / "clusters_engagement_misinformation.png", dpi=200)
     plt.close()
 
     global_means = data[CLUSTER_FEATURES].mean(numeric_only=True)
@@ -1227,7 +1941,7 @@ def run_clustering(data: pd.DataFrame, paths: OutputPaths, random_state: int) ->
         f"Best-performing clustering model: {clustering_comparison.loc[clustering_comparison['is_best'], 'model_name'].iloc[0]}",
     ]
     report_lines.extend(comparison_lines)
-    save_text(paths.reports / "clustering_report.txt", "\n".join(report_lines))
+    save_text(get_model_output_dir(paths, "kmeans", "reports") / "clustering_report.txt", "\n".join(report_lines))
     return clustered
 
 
@@ -1264,8 +1978,17 @@ def evaluate_anomaly_models(
         predicted_labels = np.where(scores >= np.median(scores), 1, 0)
     y_pred = np.asarray(predicted_labels).ravel()
 
-    y_true_binary = np.where(y_true == -1, 1, 0)
-    y_pred_binary = np.where(y_pred == -1, 1, 0)
+    if y_true.dtype.kind in {"i", "u", "f"}:
+        if -1 in y_true or -1 in y_pred:
+            y_true_binary = np.where(y_true == -1, 1, 0)
+            y_pred_binary = np.where(y_pred == -1, 1, 0)
+        else:
+            y_true_binary = y_true
+            y_pred_binary = y_pred
+    else:
+        y_true_binary = np.where(np.asarray(y_true) == "anomaly", 1, 0)
+        y_pred_binary = np.where(np.asarray(y_pred) == "anomaly", 1, 0)
+
     if y_pred_binary.ndim != 1:
         y_pred_binary = y_pred_binary.ravel()
 
@@ -1290,46 +2013,110 @@ def evaluate_anomaly_models(
     }
 
 
-def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: int) -> pd.DataFrame:
-    """Detect suspicious accounts, unusual posts, and engagement spikes."""
+def vectorized_anomaly_reasons(
+    numeric_data: pd.DataFrame,
+    labels: np.ndarray,
+    thresholds: pd.Series,
+) -> np.ndarray:
+    """Explain anomaly flags with vectorized threshold checks."""
 
-    logging.info("Starting anomaly detection")
-    numeric_data, scaled = prepare_scaled_matrix(data, CLUSTER_FEATURES)
-    model = IsolationForest(
-        n_estimators=300,
-        contamination="auto",
-        random_state=random_state,
-        n_jobs=-1,
-    )
-    labels = model.fit_predict(scaled)
-    scores = model.decision_function(scaled)
-    save_pickle(paths.models / "isolation_forest_anomaly_detector.pkl", model)
+    reasons = np.full(len(labels), "normal behavior", dtype=object)
+    anomaly_mask = labels == -1
+    if not anomaly_mask.any():
+        return reasons
 
-    scored = data.copy()
-    scored["anomaly_label"] = labels
-    scored["anomaly_score"] = scores
-    thresholds = numeric_data.quantile(0.95)
-    scored["anomaly_reason"] = [
-        explain_anomaly_reasons(numeric_data.loc[index], thresholds)
-        if label == -1
-        else "normal behavior"
-        for index, label in zip(scored.index, labels)
-    ]
+    checks = {
+        "engagement_velocity": "abnormal engagement spike",
+        "misinformation_probability": "high misinformation probability",
+        "toxicity_score": "high toxicity",
+        "follower_count": "unusually large audience",
+    }
+    reason_columns: list[pd.Series] = []
+    for column, phrase in checks.items():
+        if column in numeric_data.columns and column in thresholds.index:
+            reason_columns.append(
+                pd.Series(
+                    np.where(numeric_data[column].to_numpy() > thresholds[column], phrase, ""),
+                    index=numeric_data.index,
+                )
+            )
 
-    anomalies = scored[scored["anomaly_label"] == -1].sort_values("anomaly_score")
-    anomalies.to_csv(paths.datasets / "anomalies.csv", index=False)
+    if reason_columns:
+        combined = reason_columns[0]
+        for column in reason_columns[1:]:
+            both = (combined != "") & (column != "")
+            combined = combined.where(~both, combined + "; " + column)
+            combined = combined.where(combined != "", column)
+        fallback = "unusual multivariate behavior across account and post metrics"
+        combined = combined.replace("", fallback)
+        reasons[anomaly_mask] = combined.to_numpy()[anomaly_mask]
+    else:
+        reasons[anomaly_mask] = "unusual multivariate behavior across account and post metrics"
 
-    stats = {
-        "anomaly_count": int(len(anomalies)),
-        "total_records": int(len(scored)),
-        "anomaly_percentage": round((len(anomalies) / len(scored)) * 100 if len(scored) else 0.0, 2),
+    return reasons
+
+
+def evaluate_unsupervised_anomaly_metrics(
+    labels: np.ndarray,
+    scores: np.ndarray,
+    contamination: str | float = "auto",
+) -> dict[str, float]:
+    """Summarize anomaly detection when ground-truth labels are unavailable."""
+
+    anomaly_mask = labels == -1
+    anomaly_count = int(anomaly_mask.sum())
+    total_records = int(len(labels))
+    return {
+        "anomaly_count": anomaly_count,
+        "total_records": total_records,
+        "anomaly_percentage": round((anomaly_count / total_records) * 100 if total_records else 0.0, 2),
+        "contamination_setting": float(contamination) if isinstance(contamination, (int, float)) else float("nan"),
+        "anomaly_ratio": round(anomaly_count / total_records, 4) if total_records else 0.0,
         "score_min": float(scores.min()),
         "score_max": float(scores.max()),
         "score_mean": float(scores.mean()),
         "score_median": float(np.median(scores)),
         "score_std": float(scores.std()),
+        "score_p25": float(np.percentile(scores, 25)),
+        "score_p75": float(np.percentile(scores, 75)),
     }
-    pd.DataFrame([stats]).to_csv(paths.reports / "anomaly_metrics.csv", index=False)
+
+
+def run_anomaly_detection(
+    data: pd.DataFrame,
+    paths: OutputPaths,
+    random_state: int,
+    scaled_cache: ScaledMatrixCache | None = None,
+) -> pd.DataFrame:
+    """Detect suspicious accounts, unusual posts, and engagement spikes."""
+
+    logging.info("Starting anomaly detection")
+    cache = scaled_cache or prepare_scaled_matrix(data, CLUSTER_FEATURES)
+    numeric_data = cache.numeric_data
+    scaled = cache.scaled
+    model = IsolationForest(
+        n_estimators=300,
+        contamination="auto",
+        random_state=random_state,
+        n_jobs=get_sklearn_job_count(),
+    )
+    labels = model.fit_predict(scaled)
+    scores = model.decision_function(scaled)
+    save_pickle(get_model_output_dir(paths, "isolation_forest", "models") / "isolation_forest_anomaly_detector.pkl", model)
+
+    scored = data.copy()
+    scored["anomaly_label"] = labels
+    scored["anomaly_score"] = scores
+    thresholds = numeric_data.quantile(0.95)
+    scored["anomaly_reason"] = vectorized_anomaly_reasons(numeric_data, labels, thresholds)
+
+    anomalies = scored[scored["anomaly_label"] == -1].sort_values("anomaly_score")
+    anomalies.to_csv(get_dataset_output_dir(paths, "anomaly_detection") / "anomalies.csv", index=False)
+
+    stats = evaluate_unsupervised_anomaly_metrics(labels, scores, contamination="auto")
+    report_dir = get_model_output_dir(paths, "isolation_forest", "reports")
+    plot_dir = get_model_output_dir(paths, "isolation_forest", "plots")
+    pd.DataFrame([stats]).to_csv(report_dir / "anomaly_metrics.csv", index=False)
 
     plt.figure(figsize=(9, 7))
     sns.scatterplot(
@@ -1341,7 +2128,7 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
     )
     plt.title("Anomaly Detection: Engagement vs Misinformation")
     plt.tight_layout()
-    plt.savefig(paths.plots / "anomalies_engagement_misinformation.png", dpi=200)
+    plt.savefig(plot_dir / "anomalies_engagement_misinformation.png", dpi=200)
     plt.close()
 
     plt.figure(figsize=(8, 5))
@@ -1350,7 +2137,7 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
     plt.xlabel("Anomaly score")
     plt.ylabel("Count")
     plt.tight_layout()
-    plt.savefig(paths.plots / "anomaly_score_distribution.png", dpi=200)
+    plt.savefig(plot_dir / "anomaly_score_distribution.png", dpi=200)
     plt.close()
 
     top_reasons = anomalies["anomaly_reason"].value_counts().head(10)
@@ -1382,8 +2169,8 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
         ground_truth = pd.to_numeric(data[ground_truth_column], errors="coerce").fillna(0)
         metrics = evaluate_anomaly_models(ground_truth, scored["anomaly_score"], scored["anomaly_label"])
         confusion = pd.DataFrame(metrics["confusion_matrix"], index=["normal", "anomaly"], columns=["predicted_normal", "predicted_anomaly"])
-        confusion.to_csv(paths.reports / "anomaly_confusion_matrix.csv")
-        pd.DataFrame([metrics]).to_csv(paths.reports / "anomaly_supervised_metrics.csv", index=False)
+        confusion.to_csv(report_dir / "anomaly_confusion_matrix.csv")
+        pd.DataFrame([metrics]).to_csv(report_dir / "anomaly_supervised_metrics.csv", index=False)
         report_lines.extend(
             [
                 "Supervised evaluation metrics:",
@@ -1405,7 +2192,7 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
             plt.plot([0, 1], [0, 1], linestyle="--", color="gray")
             plt.title("ROC Curve")
             plt.tight_layout()
-            plt.savefig(paths.plots / "anomaly_roc_curve.png", dpi=200)
+            plt.savefig(plot_dir / "anomaly_roc_curve.png", dpi=200)
             plt.close()
 
             plt.figure(figsize=(6, 5))
@@ -1414,7 +2201,7 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
             plt.xlabel("Recall")
             plt.ylabel("Precision")
             plt.tight_layout()
-            plt.savefig(paths.plots / "anomaly_precision_recall_curve.png", dpi=200)
+            plt.savefig(plot_dir / "anomaly_precision_recall_curve.png", dpi=200)
             plt.close()
 
             report_lines.extend(["ROC and precision-recall curves were saved to the plots directory."])
@@ -1424,7 +2211,7 @@ def run_anomaly_detection(data: pd.DataFrame, paths: OutputPaths, random_state: 
             "The unsupervised summary above captures the anomaly count, scores, and reasons instead.",
         ])
 
-    save_text(paths.reports / "anomaly_report.txt", "\n".join(report_lines))
+    save_text(report_dir / "anomaly_report.txt", "\n".join(report_lines))
     return scored
 
 
@@ -1440,6 +2227,7 @@ def aggregate_daily_metrics(data: pd.DataFrame) -> pd.DataFrame:
         .agg(
             engagement_velocity=("engagement_velocity", "mean"),
             misinformation_probability=("misinformation_probability", "mean"),
+            credibility_score=("credibility_score", "mean"),
             post_volume=("post_id", "count"),
         )
         .reset_index()
@@ -1461,13 +2249,11 @@ def forecast_with_sklearn(series: pd.DataFrame, periods: int) -> pd.DataFrame:
     """Forecast with a lightweight trend model when Prophet is unavailable."""
 
     series = series.sort_values("analysis_date").copy()
-    series["time_index"] = np.arange(len(series))
-    # This fallback is not a full time-series model; it learns a simple nonlinear
-    # trend from time index to value so the project still runs without Prophet.
-    model = RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=get_cpu_thread_count())
+    series["time_index"] = np.arange(len(series), dtype=np.float32)
+    model = RandomForestRegressor(n_estimators=180, random_state=42, n_jobs=get_sklearn_job_count())
     model.fit(series[["time_index"]], series["value"])
 
-    future_index = np.arange(len(series) + periods)
+    future_index = np.arange(len(series) + periods, dtype=np.float32)
     future_dates = pd.date_range(series["analysis_date"].min(), periods=len(series) + periods, freq="D")
     predictions = model.predict(pd.DataFrame({"time_index": future_index}))
     residual = series["value"] - model.predict(series[["time_index"]])
@@ -1476,19 +2262,45 @@ def forecast_with_sklearn(series: pd.DataFrame, periods: int) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "analysis_date": future_dates,
-            "yhat": predictions,
-            "yhat_lower": predictions - interval,
-            "yhat_upper": predictions + interval,
+            "yhat": predictions.astype(float),
+            "yhat_lower": (predictions - interval).astype(float),
+            "yhat_upper": (predictions + interval).astype(float),
         }
     )
 
 
+def save_forecast_plot(series: pd.DataFrame, forecast: pd.DataFrame, metric: str, paths: OutputPaths) -> None:
+    """Persist forecast plots to the standardized plots directory for the selected forecasting model."""
+
+    model_name = "prophet" if Prophet is not None else "random_forest"
+    plot_dir = get_model_output_dir(paths, model_name, "plots")
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    sns.lineplot(data=series, x="analysis_date", y="value", label="actual", ax=ax)
+    sns.lineplot(data=forecast, x="analysis_date", y="yhat", label="forecast", ax=ax)
+    ax.fill_between(
+        forecast["analysis_date"],
+        forecast["yhat_lower"],
+        forecast["yhat_upper"],
+        alpha=0.18,
+        color="C1",
+    )
+    ax.set_title(f"30-Day Forecast: {metric.replace('_', ' ').title()}")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(metric.replace("_", " ").title())
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    fig.savefig(plot_dir / f"forecast_{metric}.png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def run_forecasting(data: pd.DataFrame, paths: OutputPaths, periods: int = 30) -> dict[str, pd.DataFrame]:
-    """Forecast engagement, misinformation, and post volume for 30 days."""
+    """Forecast engagement, misinformation, post volume, and credibility for 30 days."""
 
     logging.info("Starting time-series forecasting")
     daily = aggregate_daily_metrics(data)
-    daily.to_csv(paths.datasets / "daily_metrics.csv", index=False)
+    daily.to_csv(get_dataset_output_dir(paths, "forecasting") / "daily_metrics.csv", index=False)
 
     forecasts = {}
     report_lines = [
@@ -1499,7 +2311,7 @@ def run_forecasting(data: pd.DataFrame, paths: OutputPaths, periods: int = 30) -
         "",
     ]
 
-    for metric in ["engagement_velocity", "misinformation_probability", "post_volume"]:
+    for metric in ["engagement_velocity", "misinformation_probability", "credibility_score", "post_volume"]:
         series = daily[["analysis_date", metric]].rename(columns={metric: "value"}).dropna()
         # Prophet is preferred when installed because it is designed for dated
         # observations; otherwise the RandomForest fallback keeps the workflow
@@ -1511,21 +2323,9 @@ def run_forecasting(data: pd.DataFrame, paths: OutputPaths, periods: int = 30) -
 
         forecast["metric"] = metric
         forecasts[metric] = forecast
-        forecast.to_csv(paths.datasets / f"forecast_{metric}.csv", index=False)
+        forecast.to_csv(get_dataset_output_dir(paths, "forecasting") / f"forecast_{metric}.csv", index=False)
 
-        plt.figure(figsize=(10, 5))
-        sns.lineplot(data=series, x="analysis_date", y="value", label="actual")
-        sns.lineplot(data=forecast, x="analysis_date", y="yhat", label="forecast")
-        plt.fill_between(
-            forecast["analysis_date"],
-            forecast["yhat_lower"],
-            forecast["yhat_upper"],
-            alpha=0.18,
-        )
-        plt.title(f"30-Day Forecast: {metric.replace('_', ' ').title()}")
-        plt.tight_layout()
-        plt.savefig(paths.plots / f"forecast_{metric}.png", dpi=200)
-        plt.close()
+        save_forecast_plot(series, forecast, metric, paths)
 
         recent_mean = series.tail(min(7, len(series)))["value"].mean()
         future_mean = forecast.tail(periods)["yhat"].mean()
@@ -1540,7 +2340,8 @@ def run_forecasting(data: pd.DataFrame, paths: OutputPaths, periods: int = 30) -
             ]
         )
 
-    save_text(paths.reports / "forecast_report.txt", "\n".join(report_lines))
+    forecast_report_dir = get_model_output_dir(paths, "prophet" if Prophet is not None else "random_forest", "reports")
+    save_text(forecast_report_dir / "forecast_report.txt", "\n".join(report_lines))
     return forecasts
 
 
@@ -1609,36 +2410,392 @@ The forecast suggests an {forecast_direction('misinformation_probability')} misi
     save_text(paths.reports / "executive_summary.txt", summary)
 
 
+def write_project_insights_report(
+    output_dir: Path,
+    paths: OutputPaths,
+    model_results: dict[str, ModelResult],
+    clustered: pd.DataFrame | None,
+    anomalies: pd.DataFrame | None,
+    forecasts: dict[str, pd.DataFrame],
+    clustering_comparison: pd.DataFrame | None = None,
+    anomaly_metrics: pd.DataFrame | None = None,
+    supervised_anomaly_metrics: pd.DataFrame | None = None,
+) -> None:
+    """Generate stakeholder-ready markdown summaries and save them to the reports and README."""
+
+    report_lines = ["# Project Insights Report", "", "## Executive Summary", ""]
+    if model_results:
+        retained_targets = ", ".join(TARGET_LABELS[target] for target in model_results)
+        report_lines.append(
+            f"The workflow retained {retained_targets} and used explainability, segmentation, anomaly detection, and forecasting outputs to surface business-relevant insights."
+        )
+    else:
+        report_lines.append("The workflow completed without an active model set, so no supervised model summary is available yet.")
+
+    report_lines.extend(["", "## Model Performance", ""])
+    regression_rows = []
+    for target, result in model_results.items():
+        try:
+            # Validate result object and metrics
+            if not isinstance(result, ModelResult):
+                logging.error("Result for %s is not a ModelResult: type=%s", target, type(result).__name__)
+                mae = float("nan")
+                rmse = float("nan")
+                r2 = float("nan")
+            elif not isinstance(result.metrics, dict):
+                logging.error("metrics for %s is not a dict: type=%s", target, type(result.metrics).__name__)
+                mae = float("nan")
+                rmse = float("nan")
+                r2 = float("nan")
+            else:
+                mae = result.metrics.get("mae", float("nan"))
+                rmse = result.metrics.get("rmse", float("nan"))
+                r2 = result.metrics.get("r2", float("nan"))
+                
+                # Validate each metric value
+                for metric_name, metric_val in [('mae', mae), ('rmse', rmse), ('r2', r2)]:
+                    if isinstance(metric_val, str):
+                        logging.error("%s for %s is a string: %r, using nan", metric_name, target, metric_val)
+                        metric_val = float("nan")
+                    elif not isinstance(metric_val, (int, float)):
+                        logging.error("%s for %s has invalid type: %s, using nan", 
+                                     metric_name, target, type(metric_val).__name__)
+                        metric_val = float("nan")
+                    
+                    # Update local variables
+                    if metric_name == 'mae':
+                        mae = metric_val
+                    elif metric_name == 'rmse':
+                        rmse = metric_val
+                    elif metric_name == 'r2':
+                        r2 = metric_val
+            
+            regression_rows.append(
+                {
+                    "Model": TARGET_LABELS[target],
+                    "MAE": mae,
+                    "RMSE": rmse,
+                    "R2": r2,
+                }
+            )
+        except Exception as exc:
+            logging.exception("Failed to extract metrics for %s: %s", target, exc)
+            regression_rows.append(
+                {
+                    "Model": TARGET_LABELS[target],
+                    "MAE": float("nan"),
+                    "RMSE": float("nan"),
+                    "R2": float("nan"),
+                }
+            )
+    report_lines.append(build_markdown_table(pd.DataFrame(regression_rows), "Regression Metrics"))
+
+    classification_rows = []
+    if supervised_anomaly_metrics is not None and not supervised_anomaly_metrics.empty:
+        classification_rows.append(
+            {
+                "Metric": "Precision",
+                "Value": supervised_anomaly_metrics.iloc[0].get("precision", float("nan")),
+            }
+        )
+        classification_rows.append(
+            {
+                "Metric": "Recall",
+                "Value": supervised_anomaly_metrics.iloc[0].get("recall", float("nan")),
+            }
+        )
+        classification_rows.append(
+            {
+                "Metric": "F1 Score",
+                "Value": supervised_anomaly_metrics.iloc[0].get("f1_score", float("nan")),
+            }
+        )
+        classification_rows.append(
+            {
+                "Metric": "ROC-AUC",
+                "Value": supervised_anomaly_metrics.iloc[0].get("roc_auc", float("nan")),
+            }
+        )
+    else:
+        classification_rows.append({"Metric": "Classification metrics", "Value": "Not available without labeled anomalies"})
+    report_lines.append("")
+    report_lines.append(build_markdown_table(pd.DataFrame(classification_rows), "Classification Metrics"))
+
+    forecast_rows = []
+    for metric in ["engagement_velocity", "misinformation_probability", "post_volume", "credibility_score"]:
+        if metric in forecasts and not forecasts[metric].empty:
+            future_mean = forecasts[metric].tail(30)["yhat"].mean()
+            recent_mean = 0.0
+            if metric in {"engagement_velocity", "misinformation_probability", "credibility_score"} and (paths.datasets / "daily_metrics.csv").exists():
+                daily_metrics = pd.read_csv(paths.datasets / "daily_metrics.csv")
+                if metric in daily_metrics.columns:
+                    recent_mean = float(daily_metrics[metric].tail(7).mean())
+            forecast_rows.append({
+                "Metric": metric.replace("_", " ").title(),
+                "Forecast Average": future_mean,
+                "Direction": "Increase" if future_mean > recent_mean else "Decline",
+            })
+    report_lines.append("")
+    report_lines.append(build_markdown_table(pd.DataFrame(forecast_rows), "Forecasting Metrics"))
+
+    clustering_rows = []
+    if clustering_comparison is not None and not clustering_comparison.empty:
+        for _, row in clustering_comparison.iterrows():
+            clustering_rows.append(
+                {
+                    "Model": row.get("model_name", "n/a"),
+                    "Silhouette": row.get("silhouette_score", float("nan")),
+                    "Davies-Bouldin": row.get("davies_bouldin_index", float("nan")),
+                    "Calinski-Harabasz": row.get("calinski_harabasz_score", float("nan")),
+                    "Best": row.get("is_best", False),
+                }
+            )
+    report_lines.append("")
+    report_lines.append(build_markdown_table(pd.DataFrame(clustering_rows), "Clustering Metrics"))
+
+    anomaly_rows = []
+    if anomaly_metrics is not None and not anomaly_metrics.empty:
+        for column in ["anomaly_count", "total_records", "anomaly_percentage", "anomaly_ratio"]:
+            if column in anomaly_metrics.columns:
+                anomaly_rows.append({"Metric": column, "Value": anomaly_metrics.iloc[0][column]})
+    else:
+        anomaly_rows.append({"Metric": "anomaly_count", "Value": len(anomalies) if anomalies is not None else 0})
+    report_lines.append("")
+    report_lines.append(build_markdown_table(pd.DataFrame(anomaly_rows), "Anomaly Detection Metrics"))
+
+    report_lines.extend(["", "## Key Insights & Findings", ""])
+    if model_results:
+        feature_lines = []
+        for target, result in model_results.items():
+            feature_lines.append(f"- {TARGET_LABELS[target]} is driven most strongly by {result.signed_effects.iloc[0]['feature'] if not result.signed_effects.empty else 'the strongest available signal'}.")
+        report_lines.extend(feature_lines)
+
+    if clustered is not None and not clustered.empty:
+        cluster_count = int(clustered["kmeans_cluster"].nunique())
+        report_lines.append(f"- The segmentation workflow identified {cluster_count} K-Means clusters with distinct engagement, credibility, toxicity, and misinformation profiles.")
+
+    if anomalies is not None and not anomalies.empty:
+        report_lines.append(f"- IsolationForest flagged {len(anomalies)} unusual records that warrant human review because they combine high-risk behavioral signals.")
+
+    if forecasts:
+        for metric in ["credibility_score", "misinformation_probability", "post_volume"]:
+            if metric in forecasts and not forecasts[metric].empty:
+                trend = forecasts[metric].tail(30)["yhat"].mean()
+                report_lines.append(f"- The forecasted {metric.replace('_', ' ').title()} level is {trend:.4f} over the coming month.")
+
+    report_lines.extend(["", "## Forecasting Insights", ""])
+    credibility_forecast = forecasts.get("credibility_score")
+    if credibility_forecast is not None and not credibility_forecast.empty:
+        latest = credibility_forecast["yhat"].iloc[-1]
+        first = credibility_forecast["yhat"].iloc[0]
+        direction = "increasing" if latest > first else "decreasing"
+        report_lines.append(f"The credibility score forecast is {direction} over the next 30 days, with the final projected value near {latest:.4f}.")
+    report_lines.extend(["", "## Clustering Insights", ""])
+    report_lines.append("Cluster profiles should be used to tailor moderation and messaging strategies to different audience segments.")
+    report_lines.extend(["", "## Anomaly Detection Insights", ""])
+    report_lines.append("Anomalies highlight rare combinations of audience size, engagement, toxicity, and misinformation risk that are worth investigating.")
+    report_lines.extend(["", "## Recommendations", ""])
+    report_lines.append("- Prioritize the strongest drivers from the model explanations in monitoring and triage workflows.")
+    report_lines.append("- Use the forecast and clustering outputs to prepare response playbooks before risk conditions deteriorate.")
+    report_lines.append("- Review anomalies routinely and route high-risk cases to human analysts.")
+    report_lines.extend(["", "## How to Interpret Results", ""])
+    report_lines.append("Use the metrics tables to judge overall fit, the feature importance charts to understand drivers, and the segmentation/anomaly output to guide operational action.")
+    report_lines.extend(["", "## Visualization Gallery", ""])
+    report_lines.append("![Feature Importance](outputs/plots/xgboost/xgboost_feature_importance_credibility_score.png)")
+    report_lines.append("![Forecast Credibility](outputs/plots/prophet/forecast_credibility_score.png)")
+    report_lines.append("![Forecast Misinformation](outputs/plots/random_forest/forecast_misinformation_probability.png)")
+
+    report_text = "\n".join(report_lines) + "\n"
+    save_text(paths.reports / "insights_report.md", report_text)
+
+    readme_lines = [
+        "# DEPI Graduation Analytics Project",
+        "",
+        "## Executive Summary",
+        "",
+        "This project combines explainable predictive modeling, segmentation, anomaly detection, and forecasting for crisis analytics on the Silver dataset.",
+        "",
+        "## Model Performance",
+        "",
+        build_markdown_table(pd.DataFrame(regression_rows), "Regression Metrics"),
+        "",
+        build_markdown_table(pd.DataFrame(classification_rows), "Classification Metrics"),
+        "",
+        build_markdown_table(pd.DataFrame(forecast_rows), "Forecasting Metrics"),
+        "",
+        build_markdown_table(pd.DataFrame(clustering_rows), "Clustering Metrics"),
+        "",
+        build_markdown_table(pd.DataFrame(anomaly_rows), "Anomaly Detection Metrics"),
+        "",
+        "## Key Insights & Findings",
+        "",
+        "- The strongest predictive Signals come from the signed driver analysis and SHAP outputs.",
+        "- Segmentation reveals recurring audience behavior groups that can be used in targeted moderation.",
+        "- Anomaly detection helps identify extreme or suspicious content that deserves analyst attention.",
+        "",
+        "## Forecasting Insights",
+        "",
+        "Credibility-score forecasts and related trend plots are available in the reports and assets folders for stakeholder review.",
+        "",
+        "## Visualization Gallery",
+        "",
+        "![Forecast Credibility](outputs/plots/prophet/forecast_credibility_score.png)",
+        "![Feature Importance](outputs/plots/xgboost/xgboost_feature_importance_credibility_score.png)",
+        "![Forecast Misinformation](outputs/plots/random_forest/forecast_misinformation_probability.png)",
+        "",
+        "## How to Interpret Results",
+        "",
+        "Use the model metrics for fit, the feature importance charts for driver interpretation, and the forecasting and clustering outputs for business planning.",
+        "",
+    ]
+    save_text(paths.reports / "README.md", "\n".join(readme_lines) + "\n")
+
+
 def run_pipeline(
     data_path: Path,
     output_dir: Path,
     random_state: int = 42,
     xgboost_device: str = "auto",
+    resume: bool = True,
+    reuse_models: bool = True,
 ) -> None:
     """Execute the full analytics workflow from one command."""
 
     paths = create_output_paths(output_dir)
-    configure_logging(paths.reports)
-    logging.info("Advanced analytics pipeline started")
+    checkpoint = load_checkpoint(paths) if resume else {"completed_stages": [], "artifacts": {}}
+    configure_logging(paths.reports, append=resume and bool(checkpoint.get("completed_stages")))
+    logging.info("Advanced analytics pipeline started (resume=%s, reuse_models=%s)", resume, reuse_models)
+    timer = StageTimer()
 
     resolved_device = resolve_xgboost_device(xgboost_device)
-    log_training_environment(resolved_device, paths)
+    with timer.stage("environment_setup"):
+        log_training_environment(resolved_device, paths)
 
-    # The order matters: clean/engineer features first, then supervised models,
-    # then explainability and unsupervised analyses, then the executive summary
-    # that depends on all previous artifacts.
-    data = load_dataset(data_path)
-    data = add_engineered_features(data)
+    data_mtime = data_path.stat().st_mtime if data_path.exists() else 0.0
 
-    logging.info("XGBoost training device: %s (requested=%s)", resolved_device, xgboost_device)
-    model_results = train_xgboost_models(data, paths, random_state, resolved_device)
-    run_shap_analysis(model_results, paths)
-    clustered = run_clustering(data, paths, random_state)
-    anomalies = run_anomaly_detection(data, paths, random_state)
-    forecasts = run_forecasting(data, paths)
-    write_executive_summary(model_results, clustered, anomalies, forecasts, paths)
+    with timer.stage("data_loading"):
+        data = load_dataset(data_path)
+    save_checkpoint(paths, "data_loading")
 
-    logging.info("Pipeline completed successfully. Outputs saved to %s", paths.root)
+    with timer.stage("feature_engineering"):
+        data = add_engineered_features(data)
+    save_checkpoint(paths, "feature_engineering")
+
+    model_results: dict[str, ModelResult] = {}
+    with timer.stage("model_training"):
+        logging.info("XGBoost training device: %s (requested=%s)", resolved_device, xgboost_device)
+        model_results = train_xgboost_models(
+            data,
+            paths,
+            random_state,
+            resolved_device,
+            checkpoint=checkpoint,
+            data_mtime=data_mtime,
+            reuse_models=reuse_models,
+        )
+    save_checkpoint(paths, "model_training")
+
+    with timer.stage("shap_explainability"):
+        if is_stage_complete(checkpoint, "shap") and (get_model_output_dir(paths, "xgboost", "reports") / "shap_analysis.txt").exists():
+            logging.info("Skipping SHAP; checkpoint indicates prior completion")
+        else:
+            try:
+                run_shap_analysis(model_results, paths)
+                save_checkpoint(paths, "shap")
+            except Exception as exc:
+                logging.exception("SHAP explainability failed: %s", exc)
+
+    scaled_cache: ScaledMatrixCache | None = None
+    with timer.stage("preprocessing"):
+        scaled_cache = prepare_scaled_matrix(data, CLUSTER_FEATURES)
+    save_checkpoint(paths, "preprocessing")
+
+    clustered: pd.DataFrame | None = None
+    with timer.stage("clustering_training"):
+        clustered_dataset_path = get_dataset_output_dir(paths, "clustering") / "clustered_data.csv"
+        if is_stage_complete(checkpoint, "clustering") and clustered_dataset_path.exists():
+            logging.info("Loading clustered dataset from checkpoint")
+            clustered = pd.read_csv(clustered_dataset_path)
+        else:
+            try:
+                clustered = run_clustering(data, paths, random_state, scaled_cache=scaled_cache)
+                save_checkpoint(paths, "clustering", {"clustered_data": str(clustered_dataset_path)})
+            except Exception as exc:
+                logging.exception("Clustering failed: %s", exc)
+                if clustered_dataset_path.exists():
+                    clustered = pd.read_csv(clustered_dataset_path)
+
+    anomalies: pd.DataFrame | None = None
+    with timer.stage("anomaly_detection"):
+        anomalies_dataset_path = get_dataset_output_dir(paths, "anomaly_detection") / "anomalies.csv"
+        if is_stage_complete(checkpoint, "anomaly_detection") and anomalies_dataset_path.exists():
+            logging.info("Loading anomaly dataset from checkpoint")
+            anomalies = pd.read_csv(anomalies_dataset_path)
+        else:
+            try:
+                scored = run_anomaly_detection(data, paths, random_state, scaled_cache=scaled_cache)
+                anomalies = scored[scored["anomaly_label"] == -1] if "anomaly_label" in scored.columns else scored
+                save_checkpoint(paths, "anomaly_detection", {"anomalies": str(anomalies_dataset_path)})
+            except Exception as exc:
+                logging.exception("Anomaly detection failed: %s", exc)
+                if anomalies_dataset_path.exists():
+                    anomalies = pd.read_csv(anomalies_dataset_path)
+
+    forecasts: dict[str, pd.DataFrame] = {}
+    with timer.stage("forecasting"):
+        daily_metrics_path = get_dataset_output_dir(paths, "forecasting") / "daily_metrics.csv"
+        if is_stage_complete(checkpoint, "forecasting") and daily_metrics_path.exists():
+            logging.info("Loading forecasts from checkpoint")
+            for metric in ["engagement_velocity", "misinformation_probability", "post_volume"]:
+                forecast_path = get_dataset_output_dir(paths, "forecasting") / f"forecast_{metric}.csv"
+                if forecast_path.exists():
+                    forecasts[metric] = pd.read_csv(forecast_path, parse_dates=["analysis_date"])
+        else:
+            try:
+                forecasts = run_forecasting(data, paths)
+                save_checkpoint(paths, "forecasting")
+            except Exception as exc:
+                logging.exception("Forecasting failed: %s", exc)
+
+    with timer.stage("executive_summary"):
+        if clustered is not None and anomalies is not None:
+            try:
+                write_executive_summary(model_results, clustered, anomalies, forecasts, paths)
+                save_checkpoint(paths, "executive_summary")
+            except Exception as exc:
+                logging.exception("Executive summary failed: %s", exc)
+
+    with timer.stage("insights_reporting"):
+        try:
+            clustering_comparison = None
+            kmeans_reports_dir = get_model_output_dir(paths, "kmeans", "reports")
+            isolation_reports_dir = get_model_output_dir(paths, "isolation_forest", "reports")
+            if (kmeans_reports_dir / "clustering_model_comparison.csv").exists():
+                clustering_comparison = pd.read_csv(kmeans_reports_dir / "clustering_model_comparison.csv")
+            anomaly_metrics = None
+            if (isolation_reports_dir / "anomaly_metrics.csv").exists():
+                anomaly_metrics = pd.read_csv(isolation_reports_dir / "anomaly_metrics.csv")
+            supervised_anomaly_metrics = None
+            if (isolation_reports_dir / "anomaly_supervised_metrics.csv").exists():
+                supervised_anomaly_metrics = pd.read_csv(isolation_reports_dir / "anomaly_supervised_metrics.csv")
+            write_project_insights_report(
+                output_dir,
+                paths,
+                model_results,
+                clustered,
+                anomalies,
+                forecasts,
+                clustering_comparison=clustering_comparison,
+                anomaly_metrics=anomaly_metrics,
+                supervised_anomaly_metrics=supervised_anomaly_metrics,
+            )
+            save_checkpoint(paths, "insights_reporting")
+        except Exception as exc:
+            logging.exception("Insights reporting failed: %s", exc)
+
+    timer.write_report(paths.reports / "pipeline_timings.txt")
+    logging.info("Pipeline completed. Outputs saved to %s", paths.root)
+    logging.info("Stage timings: %s", timer.timings)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1651,8 +2808,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--xgboost-device",
         choices=["auto", "cuda", "cpu"],
-        default="auto",
-        help="Use auto to detect CUDA, cuda for GPU training, or cpu for fallback runs.",
+        default="cuda",
+        help="Use cuda for GPU training by default, auto to detect CUDA, or cpu for fallback runs.",
+    )
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resume from pipeline_checkpoint.json when stages already completed.",
+    )
+    parser.add_argument(
+        "--reuse-models",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reuse saved model pickles when they are newer than the input dataset.",
     )
     return parser.parse_args()
 
@@ -1664,4 +2833,6 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         random_state=args.random_state,
         xgboost_device=args.xgboost_device,
+        resume=args.resume,
+        reuse_models=args.reuse_models,
     )

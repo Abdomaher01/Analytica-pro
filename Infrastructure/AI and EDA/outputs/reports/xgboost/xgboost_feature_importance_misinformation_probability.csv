@@ -1,0 +1,79 @@
+feature,importance
+risk_minus_credibility,0.86150336
+credibility_score,0.13366023
+uncertainty_index,0.0025020514
+month_June,0.00012000244
+month_August,8.831933e-05
+emotion_Frustration,8.177088e-05
+source_type_User,8.0932725e-05
+topic_User complaints,8.029287e-05
+crisis_phase_Escalation,7.223523e-05
+stance_label_Neutral,7.176862e-05
+day_Sunday,6.84051e-05
+day_Wednesday,6.757567e-05
+audience_size,6.739109e-05
+toxicity_subjectivity_interaction,6.189092e-05
+total_engagement,5.908314e-05
+engagement_velocity,5.886316e-05
+claim_type_Observation,5.671994e-05
+stance_label_Support,5.4105843e-05
+reach_estimate,5.20846e-05
+cascade_depth,5.1742696e-05
+likes,5.022105e-05
+impressions_estimate,4.8842547e-05
+subjectivity_score,4.82521e-05
+share_rate,4.821888e-05
+reach_rate,4.4896336e-05
+follower_following_ratio,4.3954922e-05
+share_comment_ratio,4.217264e-05
+like_rate,4.1807714e-05
+month_July,4.0124076e-05
+toxicity_score,3.8604314e-05
+sentiment_score,3.6076966e-05
+topic_Rumor circulation,3.549077e-05
+comments,3.4951772e-05
+comment_rate,3.3844968e-05
+follower_count,3.1909272e-05
+topic_Privacy concerns,3.1675914e-05
+emotion_Fear,3.1416017e-05
+following_count,3.1009684e-05
+day_Tuesday,3.0820345e-05
+stance_label_Criticize,3.0636165e-05
+source_type_Bot,3.042164e-05
+account_age_days,2.878677e-05
+sentiment_label_Neutral,2.8468517e-05
+shares,2.8408806e-05
+emotion_Confusion,2.7158629e-05
+source_type_News Outlet,2.6450034e-05
+day_Saturday,2.584095e-05
+platform_Facebook,2.296361e-05
+day_Friday,2.2842562e-05
+emotion_Relief,2.1210168e-05
+topic_Official communication,1.8556977e-05
+day_Monday,1.7619053e-05
+claim_type_Fact Claim,1.7137418e-05
+emotion_Anger,1.7024417e-05
+topic_Service disruption,1.6137217e-05
+crisis_phase_Recovery,7.305582e-06
+emotion_Trust,6.173736e-06
+topic_Recovery signals,2.9049954e-06
+stance_label_Question,8.293978e-07
+is_share,0.0
+verified_flag,0.0
+year,0.0
+sentiment_label_Negative,0.0
+topic_Platform instability,0.0
+crisis_phase_Pre-Crisis,0.0
+platform_Reddit,0.0
+platform_Twitter,0.0
+crisis_phase_Peak,0.0
+crisis_phase_Response,0.0
+log_followers,0.0
+log_impressions,0.0
+claim_type_Rumor,0.0
+sentiment_label_Positive,0.0
+claim_type_Opinion,0.0
+region_Global,0.0
+language_English,0.0
+source_type_Influencer,0.0
+day_Thursday,0.0
